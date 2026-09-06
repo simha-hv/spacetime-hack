@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prototype · Three Clay</title>
+    <link rel="stylesheet" href="./hud.css" />
+    <style>
+      :root {
+        --bg: #efe6da;
+        --text: #2c2536;
+        --muted: rgba(44, 37, 54, 0.55);
+        --panel: rgba(255, 255, 255, 0.55);
+        --line: rgba(44, 37, 54, 0.14);
+        --accent: #ff7a59;
+        --ok: #1f9d5a;
+        --bad: #d43b3b;
+      }
+      body { background: #efe6da; }
+      .qr { background: #2c2536; }
+      .qr rect { fill: #efe6da; }
+      .banner { background: rgba(255, 255, 255, 0.72); color: #2c2536; }
+      .code { color: #2c2536; }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <div class="tag">three.js · soft clay / vinyl toy · ~160KB gz</div>
+
+    <script type="module">
+      import * as THREE from './three.module.js';
+      import { createSim, mountHud, STAGE_RADIUS } from './sim.js';
+      import { mountSwitcher } from './switcher.js';
+
+      mountSwitcher('three-clay');
+      const sim = createSim();
+      const updateHud = mountHud(document.body);
+
+      const canvas = document.getElementById('c');
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.05;
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color('#efe6da');
+      scene.fog = new THREE.Fog('#efe6da', 26, 62);
+
+      const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.1, 200);
+
+      /* --------------------------- studio lighting --------------------------
+         Soft, warm, three-point. The whole look rides on this: matte materials
+         under a big soft key read as clay or vinyl rather than plastic. */
+
+      scene.add(new THREE.HemisphereLight('#fff6ec', '#c9b8a8', 1.5));
+
+      const key = new THREE.DirectionalLight('#fff1e0', 2.4);
+      key.position.set(9, 16, 8);
+      key.castShadow = true;
+      key.shadow.mapSize.set(2048, 2048);
+      key.shadow.camera.near = 1;
+      key.shadow.camera.far = 60;
+      key.shadow.radius = 5;
+      key.shadow.bias = -0.0012;
+      const d = 14;
+      Object.assign(key.shadow.camera, { left: -d, right: d, top: d, bottom: -d });
+      scene.add(key);
+
+      const fill = new THREE.DirectionalLight('#a9c4ff', 0.55);
+      fill.position.set(-10, 6, -6);
+      scene.add(fill);
+
+      /* ------------------------------- stage -------------------------------- */
+
+      const stage = new THREE.Group();
+      const slab = new THREE.Mesh(
+        new THREE.CylinderGeometry(STAGE_RADIUS, STAGE_RADIUS * 0.97, 1.1, 64),
+        new THREE.MeshStandardMaterial({ color: '#f5ede2', roughness: 1.0 }),
+      );
+      slab.position.y = -0.55;
+      slab.receiveShadow = true;
+      stage.add(slab);
+
+      // A soft coloured inlay so the floor is not a flat disc.
+      const inlay = new THREE.Mesh(
+        new THREE.CylinderGeometry(STAGE_RADIUS * 0.82, STAGE_RADIUS * 0.82, 0.04, 64),
+        new THREE.MeshStandardMaterial({ color: '#ffd9c2', roughness: 1.0 }),
+      );
+      inlay.position.y = 0.02;
+      inlay.receiveShadow = true;
+      stage.add(inlay);
+
+      const rim = new THREE.Mesh(
+        new THREE.TorusGeometry(STAGE_RADIUS, 0.16, 12, 96),
+        new THREE.MeshStandardMaterial({ color: '#ff7a59', roughness: 0.75 }),
+      );
+      rim.rotation.x = Math.PI / 2;
+      rim.castShadow = true;
+      stage.add(rim);
+      scene.add(stage);
+
+      /* ------------------------------ fighters ------------------------------ */
+
+      // Shared geometry; one material per player.
+      const bodyGeo = new THREE.CapsuleGeometry(0.46, 0.62, 8, 24);
+      const limbGeo = new THREE.SphereGeometry(0.19, 14, 12);
+      const eyeGeo = new THREE.SphereGeometry(0.085, 12, 10);
+      const pupilGeo = new THREE.SphereGeometry(0.045, 10, 8);
+      const eyeMat = new THREE.MeshStandardMaterial({ color: '#fffaf4', roughness: 0.5 });
+      const pupilMat = new THREE.MeshStandardMaterial({ color: '#2c2536', roughness: 0.4 });
+
+      const rigs = sim.fighters.map((f) => {
+        const mat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(f.color),
+          // High roughness + zero metalness is the entire "clay" trick.
+          roughness: 0.95,
+          metalness: 0,
+        });
+        const g = new THREE.Group();
+
+        const body = new THREE.Mesh(bodyGeo, mat);
+        body.castShadow = true;
+        g.add(body);
+
+        const armL = new THREE.Mesh(limbGeo, mat);
+        const armR = new THREE.Mesh(limbGeo, mat);
+        armL.castShadow = armR.castShadow = true;
+        armL.position.set(-0.5, 0.02, 0.12);
+        armR.position.set(0.5, 0.02, 0.12);
+        g.add(armL, armR);
+
+        const face = new THREE.Group();
+        for (const s of [-1, 1]) {
+          const e = new THREE.Mesh(eyeGeo, eyeMat);
+          e.position.set(s * 0.16, 0.3, 0.4);
+          const p = new THREE.Mesh(pupilGeo, pupilMat);
+          p.position.set(s * 0.17, 0.3, 0.46);
+          face.add(e, p);
+        }
+        g.add(face);
+
+        scene.add(g);
+        return { g, body, armL, armR, mat, base: new THREE.Color(f.color) };
+      });
+
+      /* ------------------------------- labels ------------------------------- */
+
+      const labelLayer = document.createElement('div');
+      labelLayer.style.cssText = 'position:fixed;inset:0;pointer-events:none';
+      document.body.append(labelLayer);
+      const labels = sim.fighters.map((f) => {
+        const el = document.createElement('div');
+        el.textContent = f.name;
+        el.style.cssText =
+          `position:absolute;font:800 16px ui-sans-serif,system-ui,sans-serif;color:${f.color};` +
+          'text-shadow:0 1px 0 #fff,0 2px 8px rgba(0,0,0,.25);transform:translate(-50%,-100%)';
+        labelLayer.append(el);
+        return el;
+      });
+
+      addEventListener('resize', () => {
+        camera.aspect = innerWidth / innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(innerWidth, innerHeight);
+      });
+
+      const v = new THREE.Vector3();
+      let last = performance.now();
+
+      function frame(now) {
+        const dt = Math.min((now - last) / 1000, 0.05);
+        last = now;
+        sim.update(dt);
+
+        sim.fighters.forEach((f, i) => {
+          const r = rigs[i];
+          r.g.visible = f.alive;
+          if (!f.alive) { labels[i].style.display = 'none'; return; }
+          labels[i].style.display = '';
+
+          r.g.position.set(f.x, 0.72 + f.y, f.z);
+          r.g.rotation.set(
+            Math.sin(f.tiltDir) * f.tilt * 0.8,
+            f.facing,
+            -Math.cos(f.tiltDir) * f.tilt * 0.8,
+          );
+          const s = 1 + f.hit * 0.22;
+          r.body.scale.set(s, 1 / s, s);
+          r.mat.color.copy(r.base).lerp(new THREE.Color('#ffffff'), f.hit * 0.75);
+
+          const reach = 0.12 + f.punch * 0.5;
+          r.armL.position.z = reach;
+          r.armR.position.z = reach;
+
+          v.set(f.x, 1.9 + f.y, f.z).project(camera);
+          labels[i].style.transform =
+            `translate(${(v.x * 0.5 + 0.5) * innerWidth}px,${(-v.y * 0.5 + 0.5) * innerHeight}px) translate(-50%,-100%)`;
+        });
+
+        // Frame the fight, then add shake.
+        let cx = 0, cz = 0, n = 0, spread = 0;
+        for (const f of sim.fighters) if (f.alive) { cx += f.x; cz += f.z; n++; }
+        if (n) { cx /= n; cz /= n; }
+        for (const f of sim.fighters) if (f.alive) spread = Math.max(spread, Math.hypot(f.x - cx, f.z - cz));
+        const radius = Math.max(5.5, spread + 3.4);
+        const vFov = (camera.fov * Math.PI) / 180;
+        const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+        const dist = radius / Math.sin(Math.min(vFov, hFov) / 2);
+
+        const sx = (Math.random() - 0.5) * sim.shake * 0.5;
+        const sy = (Math.random() - 0.5) * sim.shake * 0.5;
+        camera.position.lerp(new THREE.Vector3(cx + sx, dist * 0.58 + sy, cz + dist * 0.72), 0.08);
+        camera.lookAt(cx, 0.8, cz);
+
+        renderer.render(scene, camera);
+        updateHud(sim);
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+    </script>
+  </body>
+</html>

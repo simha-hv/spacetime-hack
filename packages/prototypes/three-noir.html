@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prototype · Spotlight Noir</title>
+    <link rel="stylesheet" href="./hud.css" />
+    <style>
+      :root {
+        --bg: #05060a;
+        --accent: #ffffff;
+        --panel: rgba(255, 255, 255, 0.05);
+        --line: rgba(255, 255, 255, 0.14);
+      }
+      body { background: #05060a; }
+      .code { letter-spacing: 0.12em; }
+      .round-name { font-weight: 900; letter-spacing: 0.24em; }
+      .banner { background: #fff; color: #05060a; }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <div class="tag">three.js · single spotlight, hard shadows · fight-night staging</div>
+
+    <script type="module">
+      import * as THREE from './three.module.js';
+      import { createSim, mountHud, STAGE_RADIUS } from './sim.js';
+      import { mountSwitcher } from './switcher.js';
+
+      mountSwitcher('three-noir');
+      const sim = createSim();
+      const updateHud = mountHud(document.body);
+
+      const canvas = document.getElementById('c');
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.25;
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color('#05060a');
+      // Heavy fog so everything outside the pool of light falls to black.
+      scene.fog = new THREE.FogExp2('#05060a', 0.055);
+
+      const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 200);
+
+      /*
+       * One hard spotlight, almost no ambient. This is boxing-ring staging: the
+       * stage is an island of light in a black room, silhouettes read instantly,
+       * and long cast shadows do the work that detail would otherwise have to.
+       */
+      const spot = new THREE.SpotLight('#fff6e8', 900, 60, Math.PI / 5.2, 0.42, 1.4);
+      spot.position.set(0, 20, 2);
+      spot.castShadow = true;
+      spot.shadow.mapSize.set(2048, 2048);
+      spot.shadow.camera.near = 3;
+      spot.shadow.camera.far = 46;
+      spot.shadow.bias = -0.0008;
+      scene.add(spot, spot.target);
+
+      // Just enough bounce to keep the shadow side from being pure black.
+      scene.add(new THREE.HemisphereLight('#3b4a6b', '#0a0c14', 0.32));
+
+      // Cool rim from behind, to separate bodies from the dark.
+      const rimA = new THREE.DirectionalLight('#5f8cff', 1.5);
+      rimA.position.set(-9, 4, -11);
+      scene.add(rimA);
+      const rimB = new THREE.DirectionalLight('#ff6a4d', 0.9);
+      rimB.position.set(11, 3, -8);
+      scene.add(rimB);
+
+      /* ------------------------------- stage -------------------------------- */
+
+      const slab = new THREE.Mesh(
+        new THREE.CylinderGeometry(STAGE_RADIUS, STAGE_RADIUS * 0.96, 1.4, 72),
+        new THREE.MeshStandardMaterial({ color: '#15171f', roughness: 0.55, metalness: 0.15 }),
+      );
+      slab.position.y = -0.7;
+      slab.receiveShadow = true;
+      scene.add(slab);
+
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(STAGE_RADIUS, 0.09, 10, 110),
+        new THREE.MeshStandardMaterial({
+          color: '#ffffff', emissive: '#ffffff', emissiveIntensity: 1.4, roughness: 0.3,
+        }),
+      );
+      ring.rotation.x = Math.PI / 2;
+      scene.add(ring);
+
+      /* ------------------------------ fighters ------------------------------ */
+
+      const bodyGeo = new THREE.CapsuleGeometry(0.44, 0.66, 8, 24);
+      const armGeo = new THREE.SphereGeometry(0.18, 14, 12);
+
+      const rigs = sim.fighters.map((f) => {
+        const mat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(f.color),
+          roughness: 0.42,
+          metalness: 0.08,
+          // A faint self-glow keeps each player identifiable even in shadow.
+          emissive: new THREE.Color(f.color),
+          emissiveIntensity: 0.18,
+        });
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(bodyGeo, mat);
+        body.castShadow = true;
+        const arms = [-1, 1].map((s) => {
+          const a = new THREE.Mesh(armGeo, mat);
+          a.castShadow = true;
+          a.position.set(s * 0.5, 0, 0.12);
+          g.add(a);
+          return a;
+        });
+        g.add(body);
+        scene.add(g);
+        return { g, body, arms, mat, base: new THREE.Color(f.color) };
+      });
+
+      const labelLayer = document.createElement('div');
+      labelLayer.style.cssText = 'position:fixed;inset:0;pointer-events:none';
+      document.body.append(labelLayer);
+      const labels = sim.fighters.map((f) => {
+        const el = document.createElement('div');
+        el.textContent = f.name.toUpperCase();
+        el.style.cssText =
+          'position:absolute;font:800 13px ui-sans-serif,system-ui,sans-serif;letter-spacing:.16em;' +
+          `color:#fff;border-bottom:2px solid ${f.color};padding-bottom:2px;` +
+          'text-shadow:0 2px 10px #000;transform:translate(-50%,-100%)';
+        labelLayer.append(el);
+        return el;
+      });
+
+      addEventListener('resize', () => {
+        camera.aspect = innerWidth / innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(innerWidth, innerHeight);
+      });
+
+      const v = new THREE.Vector3();
+      const white = new THREE.Color('#ffffff');
+      let last = performance.now();
+
+      function frame(now) {
+        const dt = Math.min((now - last) / 1000, 0.05);
+        last = now;
+        sim.update(dt);
+
+        sim.fighters.forEach((f, i) => {
+          const r = rigs[i];
+          r.g.visible = f.alive;
+          if (!f.alive) { labels[i].style.display = 'none'; return; }
+          labels[i].style.display = '';
+
+          r.g.position.set(f.x, 0.72 + f.y, f.z);
+          r.g.rotation.set(
+            Math.sin(f.tiltDir) * f.tilt * 0.85,
+            f.facing,
+            -Math.cos(f.tiltDir) * f.tilt * 0.85,
+          );
+          const s = 1 + f.hit * 0.24;
+          r.body.scale.set(s, 1 / s, s);
+          r.mat.color.copy(r.base).lerp(white, f.hit * 0.9);
+          // Flash the emissive on impact — reads as a camera bulb popping.
+          r.mat.emissiveIntensity = 0.18 + f.hit * 2.6;
+
+          const reach = 0.12 + f.punch * 0.5;
+          r.arms[0].position.z = reach;
+          r.arms[1].position.z = reach;
+
+          v.set(f.x, 1.85 + f.y, f.z).project(camera);
+          labels[i].style.transform =
+            `translate(${(v.x * 0.5 + 0.5) * innerWidth}px,${(-v.y * 0.5 + 0.5) * innerHeight}px) translate(-50%,-100%)`;
+        });
+
+        let cx = 0, cz = 0, n = 0, spread = 0;
+        for (const f of sim.fighters) if (f.alive) { cx += f.x; cz += f.z; n++; }
+        if (n) { cx /= n; cz /= n; }
+        for (const f of sim.fighters) if (f.alive) spread = Math.max(spread, Math.hypot(f.x - cx, f.z - cz));
+        const radius = Math.max(5.2, spread + 3.0);
+        const vFov = (camera.fov * Math.PI) / 180;
+        const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+        const dist = radius / Math.sin(Math.min(vFov, hFov) / 2);
+
+        // Keep the spotlight over the action so the pool of light follows it.
+        spot.position.set(cx, 20, cz + 2);
+        spot.target.position.set(cx, 0, cz);
+        spot.target.updateMatrixWorld();
+
+        const sx = (Math.random() - 0.5) * sim.shake * 0.55;
+        const sy = (Math.random() - 0.5) * sim.shake * 0.55;
+        camera.position.lerp(new THREE.Vector3(cx + sx, dist * 0.42 + sy, cz + dist * 0.82), 0.07);
+        camera.lookAt(cx, 0.7, cz);
+
+        renderer.render(scene, camera);
+        updateHud(sim);
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+    </script>
+  </body>
+</html>

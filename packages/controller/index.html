@@ -1,0 +1,783 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- user-scalable=no + maximum-scale: a double-tap zoom mid-match is fatal.
+         viewport-fit=cover so env(safe-area-inset-*) reports real values. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0b0d12" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="robots" content="noindex" />
+    <title>Controller</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --player: #6b7280;
+        --bg: #0b0d12;
+        --text: #f4f6fb;
+        --muted: rgba(244, 246, 251, 0.5);
+        --line: rgba(255, 255, 255, 0.12);
+        /* Clearance for the iOS Safari bottom URL bar. There is no Fullscreen
+           API on iPhone, so the bar is simply always there and the controls
+           have to live above it. */
+        --url-bar: 64px;
+        /*
+         * Button size.
+         *
+         * Sized off the SHORT viewport axis (`vmin`), not width, because the
+         * pad is designed for landscape and in landscape width is the LONG
+         * axis — a vw-based size would blow the cluster up until it collided
+         * with the stick. The short axis is what constrains a thumb arc.
+         *
+         * The arc below is laid out in multiples of --btn, so all the spacing
+         * scales with it and nothing overlaps at any size.
+         */
+        --btn: clamp(84px, 25vmin, 124px);
+      }
+
+      * {
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        /* Pull-to-refresh reloading a controller mid-match is fatal. */
+        overscroll-behavior: none;
+        overflow: hidden;
+        touch-action: none;
+        position: fixed;
+        inset: 0;
+      }
+
+      #app {
+        position: fixed;
+        inset: 0;
+        height: 100vh;
+        height: 100dvh;
+        display: flex;
+        flex-direction: column;
+        touch-action: none;
+        padding-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--url-bar));
+      }
+
+      /* ------------------------------ header ------------------------------ */
+
+      header {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px 12px;
+      }
+      #statusDot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--muted);
+        flex: none;
+        transition: background 0.2s;
+      }
+      #statusDot[data-tone='ok'] { background: #3ddc84; }
+      #statusDot[data-tone='warn'] { background: #ffd23d; }
+      #statusDot[data-tone='bad'] { background: #ff4d4d; }
+      #status {
+        font-size: 13px;
+        color: var(--muted);
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #slot {
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--player) 22%, transparent);
+        color: var(--player);
+        border: 1px solid color-mix(in srgb, var(--player) 45%, transparent);
+      }
+
+      /* Tapping the name opens the customise sheet. It is a button so it is
+         reachable by keyboard and announced as interactive. */
+      #you {
+        flex: none;
+        display: block;
+        width: 100%;
+        text-align: center;
+        font: inherit;
+        font-size: 28px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        color: var(--player);
+        background: none;
+        border: 0;
+        padding: 6px 16px 0;
+        transition: color 0.25s;
+      }
+      #you .edit-hint {
+        display: block;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.14em;
+        color: var(--muted);
+        margin-top: 4px;
+      }
+
+      /* ------------------------------ game ------------------------------- */
+
+      /* Dim the controls while you are out, so the phone reads as "waiting"
+         at a glance rather than looking broken. Still fully interactive —
+         nothing is disabled, because the next round starts on its own. */
+      #app.out #controls { opacity: 0.3; }
+
+      #gameBanner {
+        position: fixed;
+        left: 0;
+        right: 0;
+        top: 34%;
+        text-align: center;
+        pointer-events: none;
+        z-index: 5;
+      }
+      #gameBanner[hidden] { display: none; }
+      #gameTitle {
+        font-size: 60px;
+        font-weight: 900;
+        letter-spacing: 0.04em;
+        color: var(--player);
+        text-shadow: 0 4px 26px rgba(0, 0, 0, 0.6);
+      }
+      #gameTitle.count { font-size: 120px; }
+      #gameDetail {
+        margin-top: 8px;
+        font-size: 15px;
+        color: var(--muted);
+        padding: 0 28px;
+        line-height: 1.4;
+      }
+
+      /*
+       * The first-few-seconds coach.
+       *
+       * Sits above the controls from the countdown until a few seconds into the
+       * round, then fades for good. People who have never seen this game need
+       * one sentence telling them the goal; people on their third round need it
+       * gone. Both are served by it being loud and brief.
+       */
+      #coach {
+        position: fixed;
+        left: 12px;
+        right: 12px;
+        bottom: calc(env(safe-area-inset-bottom, 0px) + var(--url-bar) + 8px);
+        z-index: 6;
+        text-align: center;
+        pointer-events: none;
+        transition: opacity 0.4s;
+      }
+      #coach[hidden] { display: none; }
+      #coach.fading { opacity: 0; }
+      #coachGoal {
+        display: inline-block;
+        font-size: 15px;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+        color: var(--text);
+        background: rgba(11, 13, 18, 0.82);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 9px 18px;
+      }
+      #coachKeys {
+        margin-top: 7px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        color: var(--muted);
+      }
+
+      /* ----------------------------- game picker --------------------------- */
+
+      /*
+       * The lobby IS the picker.
+       *
+       * Tap a game and it starts — no separate "ready" step, no vote, no
+       * waiting for a majority. Four people agreeing on something before
+       * anything can happen is how a party game dies, and whoever is keenest
+       * gets to decide.
+       *
+       * It replaces the controls while the round is not running, so the phone
+       * only ever shows one thing at a time.
+       */
+      #picker {
+        position: fixed;
+        left: 0;
+        right: 0;
+        top: 0;
+        bottom: 0;
+        z-index: 8;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 10px;
+        padding: calc(env(safe-area-inset-top, 0px) + 74px) 16px
+          calc(env(safe-area-inset-bottom, 0px) + 16px);
+        background: var(--bg);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+      }
+      #picker[hidden] { display: none; }
+      #gameList { display: flex; flex-direction: column; gap: 10px; }
+      .picker-title {
+        font-size: 12px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--muted);
+        text-align: center;
+        margin-bottom: 2px;
+      }
+      .game {
+        display: block;
+        width: 100%;
+        text-align: left;
+        font: inherit;
+        padding: 15px 18px;
+        border-radius: 16px;
+        border: 2px solid var(--line);
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text);
+        transition: border-color 0.15s, background 0.15s, transform 0.08s;
+      }
+      .game:active { transform: scale(0.985); }
+      /* The one that will run if nobody picks anything else. */
+      .game[aria-pressed='true'] {
+        border-color: var(--player);
+        background: color-mix(in srgb, var(--player) 15%, transparent);
+      }
+      .game b {
+        display: block;
+        font-size: 21px;
+        font-weight: 800;
+        letter-spacing: 0.03em;
+      }
+      .game span {
+        display: block;
+        margin-top: 3px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .game i {
+        display: block;
+        margin-top: 5px;
+        font-style: normal;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        color: color-mix(in srgb, var(--player) 80%, var(--muted));
+      }
+      #pickerHint {
+        margin-top: 4px;
+        text-align: center;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      @media (orientation: landscape) {
+        /* Two columns: in landscape the list would otherwise need scrolling
+           for three items, on a screen with width to spare. */
+        #picker {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          align-content: center;
+          gap: 10px;
+          padding: calc(env(safe-area-inset-top, 0px) + 56px) 16px 16px;
+        }
+        .picker-title, #pickerHint { grid-column: 1 / -1; }
+        /* `contents` so the buttons become direct grid children — otherwise
+           the wrapper is one cell and all three games stack inside it. */
+        #gameList { display: contents; }
+        .game { padding: 13px 15px; }
+        .game b { font-size: 18px; }
+      }
+
+      /* ---------------------------- landscape ----------------------------- */
+
+      /*
+       * LANDSCAPE IS THE INTENDED WAY TO HOLD THIS.
+       *
+       * A thumbstick on the left and a button cluster on the right is a
+       * two-thumb layout, and two thumbs only reach comfortably when the phone
+       * is sideways. In portrait everything is crushed into the bottom third
+       * and the middle 60% of the screen is dead space.
+       *
+       * We cannot force it. `screen.orientation.lock()` needs fullscreen and
+       * does not exist on iOS Safari at all, and plenty of people play with
+       * rotation lock switched on — so a hard block would simply strand them.
+       * The prompt therefore ASKS, and can be dismissed.
+       */
+      @media (orientation: landscape) {
+        /* Reclaim the vertical space: the URL bar is a portrait problem, and
+           in landscape the header has to shrink to leave room for thumbs. */
+        :root { --url-bar: 8px; }
+
+        header { padding: calc(env(safe-area-inset-top, 0px) + 6px) 14px 4px; }
+        #you { font-size: 19px; padding: 0 16px; }
+        #you .edit-hint { margin-top: 1px; font-size: 10px; }
+        #gameBanner { top: 24%; }
+        #gameTitle { font-size: 44px; }
+        #gameTitle.count { font-size: 84px; }
+        #gameDetail { margin-top: 4px; font-size: 13px; }
+
+        /* The coach sits centre-bottom between the two thumbs, where there is
+           real estate to spare, instead of under the controls. */
+        #coach { bottom: calc(env(safe-area-inset-bottom, 0px) + 10px); }
+        #coachGoal { font-size: 14px; padding: 7px 15px; }
+        #coachKeys { margin-top: 4px; font-size: 10px; }
+      }
+
+      /* ------------------------------ rotate ------------------------------ */
+
+      #rotate {
+        position: fixed;
+        inset: 0;
+        z-index: 30;
+        background: var(--bg);
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 22px;
+        text-align: center;
+        padding: 32px;
+      }
+      /* Portrait only, and only until it is dismissed. */
+      @media (orientation: portrait) {
+        #app:not(.portrait-ok) ~ #rotate { display: flex; }
+      }
+      #rotateIcon {
+        width: 74px;
+        height: 118px;
+        border: 4px solid var(--text);
+        border-radius: 14px;
+        animation: tip 2.2s ease-in-out infinite;
+      }
+      @keyframes tip {
+        0%, 30% { transform: rotate(0deg); }
+        55%, 100% { transform: rotate(-90deg); }
+      }
+      /* Respect a system preference for less motion — this animation is a hint,
+         not information, so it is safe to simply stop it. */
+      @media (prefers-reduced-motion: reduce) {
+        #rotateIcon { animation: none; transform: rotate(-90deg); }
+      }
+      #rotateTitle {
+        font-size: 26px;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+      }
+      #rotateBody {
+        font-size: 15px;
+        color: var(--muted);
+        max-width: 22em;
+        line-height: 1.45;
+      }
+      #rotateAnyway {
+        margin-top: 4px;
+        font: inherit;
+        font-size: 14px;
+        font-weight: 700;
+        padding: 12px 22px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: none;
+        color: var(--muted);
+      }
+
+      /* ---------------------------- customise ---------------------------- */
+
+      #sheet {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        background: rgba(11, 13, 18, 0.72);
+        display: flex;
+        align-items: flex-end;
+      }
+      #sheet[hidden] { display: none; }
+      #sheetPanel {
+        width: 100%;
+        max-height: 88%;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        background: #14171f;
+        border-top-left-radius: 22px;
+        border-top-right-radius: 22px;
+        border-top: 1px solid var(--line);
+        padding: 20px 20px calc(env(safe-area-inset-bottom, 0px) + 24px);
+        /* The sheet is the one place scrolling is allowed. */
+        touch-action: pan-y;
+      }
+      .sheet-title {
+        font-size: 12px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin: 18px 0 10px;
+      }
+      .sheet-title:first-child { margin-top: 4px; }
+
+      #nameInput {
+        width: 100%;
+        font: inherit;
+        font-size: 19px;
+        font-weight: 700;
+        padding: 14px 16px;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--text);
+        -webkit-user-select: text;
+        user-select: text;
+      }
+      #nameInput:focus { outline: 2px solid var(--player); border-color: transparent; }
+      #nameHint { font-size: 12px; color: var(--muted); margin-top: 8px; min-height: 15px; }
+      #nameHint[data-bad='1'] { color: #ff6b6b; }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+      }
+      .swatch {
+        position: relative;
+        aspect-ratio: 1;
+        border-radius: 14px;
+        border: 2px solid transparent;
+        background: rgba(255, 255, 255, 0.06);
+        display: grid;
+        place-items: center;
+        padding: 0;
+        font: inherit;
+      }
+      .swatch i {
+        display: block;
+        width: 62%;
+        height: 62%;
+        border-radius: 50%;
+        background: var(--swatch);
+      }
+      .swatch[aria-pressed='true'] {
+        border-color: var(--text);
+        background: rgba(255, 255, 255, 0.14);
+      }
+      /* Taken by someone else: visibly unavailable, and not tappable. */
+      .swatch[disabled] { opacity: 0.26; }
+      .swatch[disabled]::after {
+        content: '';
+        position: absolute;
+        left: 22%;
+        right: 22%;
+        top: calc(50% - 1px);
+        height: 2px;
+        background: var(--text);
+        transform: rotate(-45deg);
+      }
+      #sheetClose {
+        margin-top: 22px;
+        width: 100%;
+        font: inherit;
+        font-weight: 700;
+        font-size: 16px;
+        padding: 15px;
+        border-radius: 999px;
+        border: 0;
+        background: var(--text);
+        color: var(--bg);
+      }
+
+      /* ------------------------------ controls ---------------------------- */
+
+      #controls {
+        flex: 1;
+        display: flex;
+        min-height: 0;
+        touch-action: none;
+      }
+
+      #stickZone {
+        flex: 1;
+        position: relative;
+        touch-action: none;
+      }
+
+      /*
+       * The stick is VISIBLE AT REST.
+       *
+       * It used to be a faint dashed outline that only became a real stick once
+       * you were already touching it, and the outline sat at a fixed spot while
+       * the stick itself appeared wherever your thumb landed — so the one hint
+       * on screen pointed at the wrong place. Nobody could tell what it was.
+       *
+       * Now a solid base and knob sit at a home position, so it reads as a
+       * joystick before you touch anything. The floating origin is kept, which
+       * is what actually feels good: the base SLIDES to your thumb on contact
+       * and eases home on release.
+       */
+      #stickBase,
+      #stickKnob {
+        position: fixed;
+        top: 0;
+        left: 0;
+        border-radius: 50%;
+        pointer-events: none;
+        will-change: transform;
+        /* Easing home after release. Killed while dragging — see .dragging. */
+        transition: transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.15s;
+      }
+      /*
+       * Zero latency while the thumb is down. The knob must never lag the
+       * finger by even one eased frame; the transition is only for the
+       * spring-back once you let go.
+       */
+      #stickBase.dragging,
+      #stickKnob.dragging { transition: none; }
+
+      #stickBase {
+        width: 134px;
+        height: 134px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 2px solid rgba(255, 255, 255, 0.18);
+      }
+      /* Four notches around the ring. They cost nothing and make it
+         unmistakably a direction control rather than a button. */
+      #stickBase::before,
+      #stickBase::after {
+        content: '';
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        background: rgba(255, 255, 255, 0.16);
+        transform: translate(-50%, -50%);
+      }
+      #stickBase::before { width: 2px; height: 100%; }
+      #stickBase::after { width: 100%; height: 2px; }
+
+      #stickKnob {
+        width: 72px;
+        height: 72px;
+        background: var(--player);
+        border: 2px solid rgba(255, 255, 255, 0.28);
+        box-shadow: 0 6px 26px color-mix(in srgb, var(--player) 50%, transparent);
+      }
+      #stickKnob.dragging { box-shadow: 0 8px 34px color-mix(in srgb, var(--player) 75%, transparent); }
+
+      /* "MOVE" under the resting stick. Fades out the moment it is used — the
+         label is for the first three seconds, not for the whole match. */
+      #stickLabel {
+        position: fixed;
+        top: 0;
+        left: 0;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.18em;
+        color: rgba(255, 255, 255, 0.34);
+        pointer-events: none;
+        transform: translate(-50%, -50%);
+        transition: opacity 0.25s;
+      }
+      #stickLabel.used { opacity: 0; }
+
+      #buttons {
+        flex: 1;
+        position: relative;
+        touch-action: none;
+      }
+      /*
+       * The action word is ON the button, not just a letter.
+       *
+       * There is no console convention to lean on here — nobody knows what "B"
+       * does on a web page they opened thirty seconds ago. The letter stays
+       * because the big screen and the phone banner both refer to it, but the
+       * verb is what people actually read.
+       */
+      .btn {
+        position: absolute;
+        width: var(--btn);
+        height: var(--btn);
+        border-radius: 50%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        line-height: 1;
+        font-size: 24px;
+        font-weight: 800;
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.08);
+        border: 2px solid var(--line);
+        transition: transform 0.06s, background 0.06s;
+        touch-action: none;
+      }
+      .btn b {
+        display: block;
+        margin-top: 3px;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        color: var(--muted);
+      }
+      .btn.pressed b { color: rgba(0, 0, 0, 0.55); }
+      .btn.pressed {
+        background: var(--player);
+        border-color: var(--player);
+        transform: scale(0.92);
+      }
+      /* An arc sweeping up and left from the corner, the way a thumb actually
+         travels: A (punch) nearest the corner because it is pressed most, then
+         B (grab), then C (jump).
+
+         Every offset is a multiple of --btn, so the spacing survives the clamp
+         instead of overlapping on small phones. The multipliers are chosen so
+         the centre-to-centre distance of every pair exceeds 1.0 --btn — one
+         full diameter — which is what keeps the circles apart:
+           A-B  hypot(1.00, 0.30) = 1.04
+           B-C  hypot(0.70, 0.82) = 1.08
+           A-C  hypot(0.30, 1.12) = 1.16 */
+      #btnA { right: 8px; bottom: 16%; }
+      #btnB { right: calc(var(--btn) * 1.00 + 8px); bottom: calc(16% + var(--btn) * 0.30); }
+      #btnC { right: calc(var(--btn) * 0.30 + 8px); bottom: calc(16% + var(--btn) * 1.12); }
+
+      /* ------------------------------ overlay ----------------------------- */
+
+      #overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(11, 13, 18, 0.94);
+        display: grid;
+        place-items: center;
+        text-align: center;
+        padding: 32px;
+        z-index: 10;
+      }
+      #overlay[hidden] { display: none; }
+      #overlayTitle { font-size: 26px; font-weight: 800; margin: 0 0 10px; }
+      #overlayBody { font-size: 15px; color: var(--muted); margin: 0 0 24px; line-height: 1.5; }
+      #overlayAction {
+        font: inherit;
+        font-weight: 700;
+        font-size: 16px;
+        padding: 14px 30px;
+        border-radius: 999px;
+        border: 0;
+        background: var(--text);
+        color: var(--bg);
+      }
+      #overlayAction[hidden] { display: none; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <div id="statusDot" data-tone="warn"></div>
+        <div id="status">connecting…</div>
+        <div id="slot">—</div>
+      </header>
+
+      <button id="you" type="button">
+        <span id="youLabel">JOINING…</span>
+        <span class="edit-hint" id="editHint" hidden>TAP TO CHANGE</span>
+      </button>
+
+      <div id="controls">
+        <div id="stickZone"></div>
+        <div id="buttons">
+          <div class="btn" id="btnA">A<b>PUNCH</b></div>
+          <div class="btn" id="btnB">B<b>GRAB</b></div>
+          <div class="btn" id="btnC">C<b>JUMP</b></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="picker" hidden>
+      <div class="picker-title">Pick a game to start</div>
+      <div id="gameList"></div>
+      <div id="pickerHint">Anyone can pick · tap to start</div>
+    </div>
+
+    <div id="rotate">
+      <div id="rotateIcon"></div>
+      <div id="rotateTitle">Turn your phone sideways</div>
+      <div id="rotateBody">
+        The stick and the buttons are a two-thumb layout — landscape is how this
+        is meant to be held.
+      </div>
+      <button id="rotateAnyway" type="button">Play in portrait anyway</button>
+    </div>
+
+    <div id="coach" hidden>
+      <span id="coachGoal">Knock everyone off the roof</span>
+      <div id="coachKeys">DRAG TO MOVE · A TO PUNCH</div>
+    </div>
+
+    <div id="stickBase"></div>
+    <div id="stickKnob"></div>
+    <div id="stickLabel">MOVE</div>
+
+    <div id="gameBanner" hidden>
+      <div id="gameTitle"></div>
+      <div id="gameDetail"></div>
+    </div>
+
+    <div id="sheet" hidden>
+      <div id="sheetPanel">
+        <div class="sheet-title">Your name</div>
+        <input
+          id="nameInput"
+          type="text"
+          inputmode="text"
+          autocomplete="off"
+          autocapitalize="characters"
+          autocorrect="off"
+          spellcheck="false"
+          maxlength="12"
+          placeholder="P1"
+          enterkeyhint="done"
+        />
+        <div id="nameHint"></div>
+
+        <div class="sheet-title">Colour</div>
+        <div class="grid" id="colorGrid"></div>
+
+        <button id="sheetClose" type="button">Back to the game</button>
+      </div>
+    </div>
+
+    <div id="overlay" hidden>
+      <div>
+        <h1 id="overlayTitle"></h1>
+        <p id="overlayBody"></p>
+        <button id="overlayAction" hidden></button>
+      </div>
+    </div>
+
+    <!-- build inlines the bundle here -->
+    <script>/*__CONTROLLER_BUNDLE__*/</script>
+  </body>
+</html>

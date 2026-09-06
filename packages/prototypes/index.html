@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Visual prototypes</title>
+    <link rel="stylesheet" href="./hud.css" />
+    <style>
+      body { overflow: auto; display: grid; place-items: center; min-height: 100%; }
+      main { max-width: 940px; padding: 56px 28px 80px; }
+      h1 { font-size: 38px; margin: 0 0 10px; letter-spacing: -0.01em; }
+      .lede { color: var(--muted); font-size: 17px; line-height: 1.55; margin: 0 0 34px; max-width: 62ch; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+      a.card {
+        display: block; padding: 22px; border-radius: 16px; text-decoration: none;
+        background: var(--panel); border: 1px solid var(--line); color: var(--text);
+        transition: border-color .18s, transform .18s;
+      }
+      a.card:hover { border-color: rgba(255,255,255,.4); transform: translateY(-2px); }
+      .card h2 { margin: 0 0 6px; font-size: 20px; }
+      .card p { margin: 0 0 12px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+      .meta { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--muted); }
+      .swatch { display: flex; gap: 6px; margin-bottom: 14px; }
+      .swatch i { width: 26px; height: 26px; border-radius: 7px; }
+      .note { margin-top: 34px; font-size: 14px; color: var(--muted); line-height: 1.6; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Pick the look</h1>
+      <p class="lede">
+        Eight renderers, one identical scene. Same four fighters, same choreography, same HUD —
+        the only thing that changes is how it is drawn. Each runs a ~20 second loop with
+        knockdowns and a winner, so you can judge motion, not just a still.
+        Arrow keys flip between them.
+      </p>
+
+      <a class="card" href="./canvas2d.html" style="margin-bottom:18px">
+        <div class="swatch"><i style="background:#ff6b6b"></i><i style="background:#4b8bff"></i><i style="background:#4bd98a"></i><i style="background:#ffd23d"></i></div>
+        <h2>Canvas 2D animals &rarr;</h2>
+        <p>Plush animal characters drawn entirely in canvas paths &mdash; layered fur, directional shading, painted eyes. No engine, no WebGL, no model files. <b>Start here.</b></p>
+        <div class="meta">canvas 2d · 0 deps · recolourable · 3 poses</div>
+      </a>
+
+      <a class="card" href="./models.html" style="margin-bottom:18px">
+        <div class="swatch"><i style="background:#ec6a2b"></i><i style="background:#6b4a3a"></i><i style="background:#c0392b"></i><i style="background:#e8d5a3"></i></div>
+        <h2>Modelled animals &rarr;</h2>
+        <p>Real authored meshes loaded from files, proving the pipeline. The models themselves are the wrong sort &mdash; see the note in the write-up.</p>
+        <div class="meta">three.js · GLTFLoader · needs a proper asset pack</div>
+      </a>
+
+      <a class="card" href="./roster.html" style="margin-bottom:18px">
+        <div class="swatch"><i style="background:#ff5a5a"></i><i style="background:#3d7dff"></i><i style="background:#3ddc84"></i><i style="background:#ffd23d"></i></div>
+        <h2>Character roster &rarr;</h2>
+        <p>Ten character designs, static, for review. Start here &mdash; the characters matter more than the renderer, and every look below is currently drawing the same placeholder shapes.</p>
+        <div class="meta">three.js · static · colour swatches + 3 angles</div>
+      </a>
+
+      <div class="grid">
+        <a class="card" href="./three-clay.html">
+          <div class="swatch"><i style="background:#efe6da"></i><i style="background:#ff7a59"></i><i style="background:#3d7dff"></i><i style="background:#ffd9c2"></i></div>
+          <h2>Clay</h2>
+          <p>Soft-lit vinyl toy. Matte materials, warm studio key, big soft shadows. The closest of the eight to Party Animals.</p>
+          <div class="meta">three.js · ~160KB gz</div>
+        </a>
+
+        <a class="card" href="./three-toon.html">
+          <div class="swatch"><i style="background:#12132b"></i><i style="background:#ffe066"></i><i style="background:#3ddc84"></i><i style="background:#b06dff"></i></div>
+          <h2>Toon</h2>
+          <p>Cel shaded with black inverted-hull outlines and a hard 3-step ramp. Bold and graphic; the most legible at TV distance.</p>
+          <div class="meta">three.js · ~160KB gz</div>
+        </a>
+
+        <a class="card" href="./three-noir.html">
+          <div class="swatch"><i style="background:#05060a"></i><i style="background:#ffffff"></i><i style="background:#5f8cff"></i><i style="background:#ff6a4d"></i></div>
+          <h2>Noir</h2>
+          <p>One hard spotlight in a black room. Fight-night staging: silhouettes, long cast shadows, a flash of emissive on every hit.</p>
+          <div class="meta">three.js · ~160KB gz</div>
+        </a>
+
+        <a class="card" href="./three-pixel.html">
+          <div class="swatch"><i style="background:#1b2b34"></i><i style="background:#f7c948"></i><i style="background:#4e7a63"></i><i style="background:#6b4b3a"></i></div>
+          <h2>Pixel Diorama</h2>
+          <p>Orthographic 3D rendered at a fifth resolution and upscaled hard. Boxy voxel bodies, chunky shadows, snapped 8-way facing.</p>
+          <div class="meta">three.js · ~160KB gz · runs on anything</div>
+        </a>
+
+        <a class="card" href="./pixi-arcade.html">
+          <div class="swatch"><i style="background:#05030f"></i><i style="background:#ff3ea5"></i><i style="background:#4df0ff"></i><i style="background:#ffd23d"></i></div>
+          <h2>Arcade</h2>
+          <p>WebGL 2D with true additive bloom and a spark system. Glow actually bleeds across shapes rather than faking it with shadows.</p>
+          <div class="meta">pixi.js v8 · ~110KB gz</div>
+        </a>
+
+        <a class="card" href="./sketch.html">
+          <div class="swatch"><i style="background:#f4efe3"></i><i style="background:#2b2620"></i><i style="background:#d1495b"></i><i style="background:#e7dcc6"></i></div>
+          <h2>Sketchbook</h2>
+          <p>Hand-drawn ink on paper, redrawn on a 12fps clock so the lines &ldquo;boil&rdquo; like traditional animation. Nothing else looks like it.</p>
+          <div class="meta">rough.js · ~10KB gz · 0 WebGL</div>
+        </a>
+
+        <a class="card" href="./canvas-iso.html">
+          <div class="swatch"><i style="background:#191426"></i><i style="background:#ffb17a"></i><i style="background:#6d5b8f"></i><i style="background:#ffd23d"></i></div>
+          <h2>Isometric</h2>
+          <p>2.5D with a warm painted palette, gradient bodies and soft contact shadows. Character without a 3D engine at all.</p>
+          <div class="meta">canvas 2d · 0 deps · ~11KB</div>
+        </a>
+
+        <a class="card" href="./canvas-neon.html">
+          <div class="swatch"><i style="background:#06070d"></i><i style="background:#5cf0ff"></i><i style="background:#ff4d4d"></i><i style="background:#3ddc84"></i></div>
+          <h2>Neon</h2>
+          <p>Top-down arcade. Glowing rim, motion trails, impact rings. Reads instantly and never occludes anyone, but the least characterful.</p>
+          <div class="meta">canvas 2d · 0 deps · ~9KB</div>
+        </a>
+      </div>
+
+      <p class="note">
+        These are visual studies only — the animation is a scripted loop, not the real game.
+        Nothing here is wired to the physics or to phones. Pick a direction (or parts of
+        several) and that is what gets built for real.
+      </p>
+    </main>
+  </body>
+</html>

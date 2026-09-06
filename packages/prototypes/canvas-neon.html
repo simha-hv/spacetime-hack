@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prototype · Canvas Neon</title>
+    <link rel="stylesheet" href="./hud.css" />
+    <style>
+      :root {
+        --bg: #06070d;
+        --accent: #5cf0ff;
+        --panel: rgba(92, 240, 255, 0.07);
+        --line: rgba(92, 240, 255, 0.22);
+      }
+      body {
+        background:
+          radial-gradient(900px 700px at 50% 55%, rgba(60, 120, 255, 0.13), transparent 70%),
+          #06070d;
+      }
+      .code { color: var(--accent); text-shadow: 0 0 22px rgba(92, 240, 255, 0.55); }
+      .round-name { color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <div class="tag">canvas 2d · top-down neon · 0 deps · ~9KB</div>
+
+    <script type="module">
+      import { createSim, mountHud, STAGE_RADIUS } from './sim.js';
+      import { mountSwitcher } from './switcher.js';
+
+      mountSwitcher('canvas-neon');
+      const sim = createSim();
+      const updateHud = mountHud(document.body);
+
+      const canvas = document.getElementById('c');
+      const ctx = canvas.getContext('2d');
+      let W = 0, H = 0, DPR = 1, SCALE = 1;
+
+      function resize() {
+        DPR = Math.min(devicePixelRatio || 1, 2);
+        W = innerWidth; H = innerHeight;
+        canvas.width = Math.round(W * DPR);
+        canvas.height = Math.round(H * DPR);
+        // Fit the arena to the smaller axis with margin for knockbacks.
+        SCALE = Math.min(W, H) / ((STAGE_RADIUS + 2.4) * 2);
+      }
+      addEventListener('resize', resize);
+      resize();
+
+      /** Trails: a short ring buffer per fighter, drawn as fading ghosts. */
+      const trails = sim.fighters.map(() => []);
+
+      function draw(dt) {
+        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+        ctx.clearRect(0, 0, W, H);
+
+        const shakeX = (Math.random() - 0.5) * sim.shake * 16;
+        const shakeY = (Math.random() - 0.5) * sim.shake * 16;
+        const cx = W / 2 + shakeX;
+        const cy = H / 2 + shakeY;
+        const R = STAGE_RADIUS * SCALE;
+
+        /* ------------------------------ floor ------------------------------ */
+
+        // Dark well, then a glowing rim. The edge is what kills you, so it is
+        // the brightest thing on screen.
+        const floor = ctx.createRadialGradient(cx, cy, R * 0.1, cx, cy, R);
+        floor.addColorStop(0, '#101a2e');
+        floor.addColorStop(0.75, '#0b1220');
+        floor.addColorStop(1, '#0a0f1c');
+        ctx.beginPath();
+        ctx.arc(cx, cy, R, 0, Math.PI * 2);
+        ctx.fillStyle = floor;
+        ctx.fill();
+
+        // Concentric guides — cheap depth cue and makes knockback distance read.
+        ctx.strokeStyle = 'rgba(92,240,255,0.07)';
+        ctx.lineWidth = 1;
+        for (let i = 1; i <= 3; i++) {
+          ctx.beginPath();
+          ctx.arc(cx, cy, (R * i) / 4, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        ctx.save();
+        ctx.shadowColor = '#5cf0ff';
+        ctx.shadowBlur = 30;
+        ctx.strokeStyle = '#5cf0ff';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(cx, cy, R, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+
+        /* ----------------------------- impacts ----------------------------- */
+
+        for (const im of sim.impacts) {
+          const k = im.age / 0.6;
+          const rr = (0.4 + k * 2.6) * SCALE * im.power;
+          ctx.beginPath();
+          ctx.arc(cx + im.x * SCALE, cy + im.z * SCALE, rr, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(255,255,255,${(1 - k) * 0.85})`;
+          ctx.lineWidth = 5 * (1 - k) + 1;
+          ctx.stroke();
+        }
+
+        /* ---------------------------- fighters ----------------------------- */
+
+        sim.fighters.forEach((f, i) => {
+          const trail = trails[i];
+          if (f.alive) {
+            trail.push({ x: f.x, z: f.z });
+            if (trail.length > 9) trail.shift();
+          } else {
+            trail.length = 0;
+            return;
+          }
+
+          const px = cx + f.x * SCALE;
+          const py = cy + f.z * SCALE;
+          const rad = 0.52 * SCALE;
+
+          // Motion trail.
+          for (let k = 0; k < trail.length; k++) {
+            const a = (k / trail.length) * 0.22;
+            ctx.beginPath();
+            ctx.arc(cx + trail[k].x * SCALE, cy + trail[k].z * SCALE, rad * (0.5 + k / trail.length * 0.5), 0, Math.PI * 2);
+            ctx.fillStyle = f.color;
+            ctx.globalAlpha = a;
+            ctx.fill();
+            ctx.globalAlpha = 1;
+          }
+
+          // Ground shadow, offset by hop height.
+          ctx.beginPath();
+          ctx.ellipse(px, py + rad * 0.35, rad * (1 - f.y * 0.25), rad * 0.4 * (1 - f.y * 0.25), 0, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(0,0,0,0.45)';
+          ctx.fill();
+
+          // Body: squash on impact, lifted by the hop.
+          const lift = f.y * SCALE * 0.9;
+          const squash = 1 + f.hit * 0.3;
+          ctx.save();
+          ctx.translate(px, py - lift);
+          ctx.rotate(f.tilt * 0.5 * Math.cos(f.tiltDir));
+          ctx.shadowColor = f.color;
+          ctx.shadowBlur = 22 + f.hit * 40;
+          ctx.beginPath();
+          ctx.ellipse(0, 0, rad * squash, rad / squash, 0, 0, Math.PI * 2);
+          ctx.fillStyle = f.hit > 0.05 ? '#ffffff' : f.color;
+          ctx.fill();
+          ctx.shadowBlur = 0;
+
+          // Facing pip + punch reach.
+          const reach = rad * (0.75 + f.punch * 0.75);
+          ctx.beginPath();
+          ctx.arc(Math.sin(f.facing) * reach, Math.cos(f.facing) * reach, rad * 0.26, 0, Math.PI * 2);
+          ctx.fillStyle = '#fff';
+          ctx.fill();
+          ctx.restore();
+
+          // Name.
+          ctx.font = '700 15px ui-sans-serif, system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = 'rgba(6,7,13,0.9)';
+          ctx.strokeText(f.name, px, py - rad - 14 - lift);
+          ctx.fillStyle = f.color;
+          ctx.fillText(f.name, px, py - rad - 14 - lift);
+        });
+      }
+
+      let last = performance.now();
+      function frame(now) {
+        const dt = Math.min((now - last) / 1000, 0.05);
+        last = now;
+        sim.update(dt);
+        draw(dt);
+        updateHud(sim);
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+    </script>
+  </body>
+</html>

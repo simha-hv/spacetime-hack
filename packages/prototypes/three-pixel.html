@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prototype · Pixel Diorama</title>
+    <link rel="stylesheet" href="./hud.css" />
+    <style>
+      :root {
+        --bg: #1b2b34;
+        --accent: #f7c948;
+        --panel: rgba(247, 201, 72, 0.08);
+        --line: rgba(247, 201, 72, 0.25);
+        --font: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      }
+      body { background: linear-gradient(180deg, #2b4250 0%, #1b2b34 70%, #121d24 100%); }
+      /* The whole look: render tiny, upscale with hard edges. */
+      canvas { image-rendering: pixelated; image-rendering: crisp-edges; }
+      .code { color: var(--accent); }
+      .round-name { color: var(--accent); }
+      .standing, .join, .banner { border-radius: 4px; }
+      .qr { border-radius: 2px; }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <div class="tag">three.js · orthographic + low-res render · pixel diorama</div>
+
+    <script type="module">
+      import * as THREE from './three.module.js';
+      import { createSim, mountHud, STAGE_RADIUS } from './sim.js';
+      import { mountSwitcher } from './switcher.js';
+
+      mountSwitcher('three-pixel');
+      const sim = createSim();
+      const updateHud = mountHud(document.body);
+
+      const canvas = document.getElementById('c');
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.BasicShadowMap;
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color('#1b2b34');
+
+      /*
+       * Orthographic + a fixed 3/4 angle is what makes it a diorama rather
+       * than a game camera. Nothing foreshortens, so the whole stage reads as
+       * one flat, legible picture — which is exactly what you want on a TV
+       * across a room.
+       */
+      const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 120);
+      camera.position.set(16, 15, 16);
+      camera.lookAt(0, 0.6, 0);
+
+      /** Render at ~1/5 scale, then let CSS blow it up with hard pixels. */
+      const PIXEL = 5;
+      function resize() {
+        const w = Math.max(1, Math.floor(innerWidth / PIXEL));
+        const h = Math.max(1, Math.floor(innerHeight / PIXEL));
+        renderer.setPixelRatio(1);
+        renderer.setSize(w, h, false);
+        canvas.style.width = '100%';
+        canvas.style.height = '100%';
+
+        const span = (STAGE_RADIUS + 3.2) * 2;
+        const aspect = w / h;
+        const halfH = span / 2;
+        const halfW = halfH * aspect;
+        camera.left = -halfW; camera.right = halfW;
+        camera.top = halfH; camera.bottom = -halfH;
+        camera.updateProjectionMatrix();
+      }
+      addEventListener('resize', resize);
+      resize();
+
+      scene.add(new THREE.HemisphereLight('#9fd3e8', '#20303a', 1.1));
+      const key = new THREE.DirectionalLight('#fff3d0', 2.5);
+      key.position.set(9, 13, 5);
+      key.castShadow = true;
+      // Small shadow map on purpose: chunky shadows suit chunky pixels.
+      key.shadow.mapSize.set(512, 512);
+      const d = 13;
+      Object.assign(key.shadow.camera, { left: -d, right: d, top: d, bottom: -d, near: 1, far: 50 });
+      scene.add(key);
+
+      /* ------------------------------- stage -------------------------------- */
+
+      const slab = new THREE.Mesh(
+        new THREE.CylinderGeometry(STAGE_RADIUS, STAGE_RADIUS, 1.6, 26),
+        new THREE.MeshLambertMaterial({ color: '#4e7a63' }),
+      );
+      slab.position.y = -0.8;
+      slab.receiveShadow = true;
+      scene.add(slab);
+
+      const dirt = new THREE.Mesh(
+        new THREE.CylinderGeometry(STAGE_RADIUS * 1.01, STAGE_RADIUS * 0.86, 1.9, 26),
+        new THREE.MeshLambertMaterial({ color: '#6b4b3a' }),
+      );
+      dirt.position.y = -1.75;
+      scene.add(dirt);
+
+      const trim = new THREE.Mesh(
+        new THREE.TorusGeometry(STAGE_RADIUS, 0.2, 6, 26),
+        new THREE.MeshLambertMaterial({ color: '#f7c948' }),
+      );
+      trim.rotation.x = Math.PI / 2;
+      scene.add(trim);
+
+      /* ------------------------------ fighters ------------------------------ */
+
+      // Boxes, not capsules — round shapes fight the pixel grid.
+      const bodyGeo = new THREE.BoxGeometry(0.85, 1.0, 0.85);
+      const headGeo = new THREE.BoxGeometry(0.95, 0.8, 0.9);
+      const armGeo = new THREE.BoxGeometry(0.3, 0.3, 0.55);
+      const eyeGeo = new THREE.BoxGeometry(0.16, 0.2, 0.06);
+      const eyeMat = new THREE.MeshBasicMaterial({ color: '#16232b' });
+
+      const rigs = sim.fighters.map((f) => {
+        const mat = new THREE.MeshLambertMaterial({ color: new THREE.Color(f.color) });
+        const dark = new THREE.MeshLambertMaterial({
+          color: new THREE.Color(f.color).multiplyScalar(0.7),
+        });
+        const g = new THREE.Group();
+
+        const body = new THREE.Mesh(bodyGeo, dark);
+        body.position.y = -0.25;
+        const head = new THREE.Mesh(headGeo, mat);
+        head.position.y = 0.62;
+        body.castShadow = head.castShadow = true;
+
+        const arms = [-1, 1].map((s) => {
+          const a = new THREE.Mesh(armGeo, mat);
+          a.position.set(s * 0.58, -0.15, 0.2);
+          a.castShadow = true;
+          g.add(a);
+          return a;
+        });
+
+        for (const s of [-1, 1]) {
+          const e = new THREE.Mesh(eyeGeo, eyeMat);
+          e.position.set(s * 0.22, 0.66, 0.47);
+          g.add(e);
+        }
+
+        g.add(body, head);
+        scene.add(g);
+        return { g, body, head, arms, mat, dark, base: new THREE.Color(f.color) };
+      });
+
+      const labelLayer = document.createElement('div');
+      labelLayer.style.cssText = 'position:fixed;inset:0;pointer-events:none';
+      document.body.append(labelLayer);
+      const labels = sim.fighters.map((f) => {
+        const el = document.createElement('div');
+        el.textContent = f.name.toUpperCase();
+        el.style.cssText =
+          `position:absolute;font:700 13px ui-monospace,Menlo,monospace;letter-spacing:.08em;color:${f.color};` +
+          'text-shadow:2px 2px 0 #16232b;transform:translate(-50%,-100%)';
+        labelLayer.append(el);
+        return el;
+      });
+
+      const v = new THREE.Vector3();
+      const white = new THREE.Color('#ffffff');
+      let last = performance.now();
+
+      function frame(now) {
+        const dt = Math.min((now - last) / 1000, 0.05);
+        last = now;
+        sim.update(dt);
+
+        sim.fighters.forEach((f, i) => {
+          const r = rigs[i];
+          r.g.visible = f.alive;
+          if (!f.alive) { labels[i].style.display = 'none'; return; }
+          labels[i].style.display = '';
+
+          r.g.position.set(f.x, 0.95 + f.y, f.z);
+          // Snap the yaw to 8 directions — sprite-like, and it stops the
+          // low-res render shimmering as the body rotates a fraction of a pixel.
+          const step = Math.PI / 4;
+          r.g.rotation.set(
+            Math.sin(f.tiltDir) * f.tilt * 0.7,
+            Math.round(f.facing / step) * step,
+            -Math.cos(f.tiltDir) * f.tilt * 0.7,
+          );
+          const s = 1 + f.hit * 0.22;
+          r.head.scale.set(s, 1 / s, s);
+          r.mat.color.copy(r.base).lerp(white, f.hit * 0.85);
+          r.dark.color.copy(r.base).multiplyScalar(0.7).lerp(white, f.hit * 0.85);
+
+          const reach = 0.2 + f.punch * 0.5;
+          r.arms[0].position.z = reach;
+          r.arms[1].position.z = reach;
+
+          v.set(f.x, 2.3 + f.y, f.z).project(camera);
+          labels[i].style.transform =
+            `translate(${Math.round((v.x * 0.5 + 0.5) * innerWidth)}px,${Math.round((-v.y * 0.5 + 0.5) * innerHeight)}px) translate(-50%,-100%)`;
+        });
+
+        // Shake in whole pixels, so it stays on the grid.
+        const px = Math.round((Math.random() - 0.5) * sim.shake * 3);
+        const py = Math.round((Math.random() - 0.5) * sim.shake * 3);
+        camera.setViewOffset(innerWidth, innerHeight, px, py, innerWidth, innerHeight);
+
+        renderer.render(scene, camera);
+        updateHud(sim);
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+    </script>
+  </body>
+</html>

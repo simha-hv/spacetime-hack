@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Primitives vs a real model</title>
+    <link rel="stylesheet" href="./hud.css" />
+    <style>
+      :root { --bg: #ece3d6; --text: #2f2a34; --muted: rgba(47,42,52,.55); --line: rgba(47,42,52,.14); }
+      body { background: #ece3d6; overflow: hidden; }
+      header { position: fixed; top: 26px; left: 30px; z-index: 5; }
+      h1 { margin: 0; font-size: 26px; }
+      header p { margin: 6px 0 0; font-size: 14px; color: var(--muted); max-width: 60ch; line-height: 1.55; }
+      .cap { position: absolute; transform: translate(-50%,0); text-align: center; width: 320px; pointer-events: none; }
+      .cap b { display: block; font-size: 18px; font-weight: 800; }
+      .cap span { display: block; font-size: 12.5px; color: var(--muted); margin-top: 3px; line-height: 1.45; }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <header>
+      <h1>Why the roster does not look like Party Animals</h1>
+      <p>Left: my characters, built from spheres and capsules in code. Right: an actual
+         modelled, skinned mesh loaded from a file. Same lighting, same renderer, same scene.
+         The gap is the asset, not the engine or the shading.</p>
+    </header>
+    <div id="caps"></div>
+    <div class="tag">three.js · GLTFLoader · Fox model by PixelMannen (CC0)</div>
+
+    <script>
+      window.__err = [];
+      addEventListener('error', (e) => window.__err.push(e.target && e.target.src ? 'failed to load: ' + e.target.src : String(e.message || e.error)), true);
+      addEventListener('unhandledrejection', (e) => window.__err.push('rejected: ' + e.reason));
+    </script>
+    <script type="importmap">
+      { "imports": { "three": "./three.module.js" } }
+    </script>
+    <script type="module">
+      import * as THREE from './three.module.js';
+      import { GLTFLoader } from './jsm/loaders/GLTFLoader.js';
+      import { buildBrawler, POSES } from './brawler.js';
+
+      const canvas = document.getElementById('c');
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color('#ece3d6');
+      scene.add(new THREE.HemisphereLight('#fffaf0', '#cbbfae', 1.5));
+      const key = new THREE.DirectionalLight('#fff4e4', 2.4);
+      key.position.set(4, 9, 6);
+      key.castShadow = true;
+      key.shadow.mapSize.set(2048, 2048);
+      key.shadow.radius = 4;
+      key.shadow.bias = -0.0015;
+      Object.assign(key.shadow.camera, { left: -6, right: 6, top: 6, bottom: -6, near: 1, far: 30 });
+      scene.add(key);
+
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(60, 60),
+        new THREE.MeshStandardMaterial({ color: '#e4d9c8', roughness: 1 }),
+      );
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      // Mine.
+      const mine = buildBrawler('kit', '#ff5a5a');
+      POSES.stance(mine.joints);
+      mine.root.position.set(-1.5, 0, 0);
+      mine.root.scale.setScalar(1.25);
+      scene.add(mine.root);
+
+      // A real one.
+      new GLTFLoader().load('./fox.glb', (gltf) => {
+        const fox = gltf.scene;
+        fox.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+        const box = new THREE.Box3().setFromObject(fox);
+        const h = box.max.y - box.min.y;
+        fox.scale.setScalar(1.9 / h);
+        const b2 = new THREE.Box3().setFromObject(fox);
+        fox.position.set(1.6, -b2.min.y, 0);
+        fox.rotation.y = -0.5;
+        scene.add(fox);
+        render();
+      });
+
+      const camera = new THREE.PerspectiveCamera(36, innerWidth / innerHeight, 0.1, 100);
+      camera.position.set(0, 2.1, 7.4);
+      camera.lookAt(0, 0.95, 0);
+
+      const capsEl = document.getElementById('caps');
+      const caps = [
+        { x: -1.5, b: 'Built from primitives', s: 'Spheres and capsules assembled in code. No mesh, no fur, no modelling.' },
+        { x: 1.6, b: 'A modelled, skinned mesh', s: 'An actual authored model with a rig and textures. 160KB file.' },
+      ].map((c) => {
+        const el = document.createElement('div');
+        el.className = 'cap';
+        el.innerHTML = `<b>${c.b}</b><span>${c.s}</span>`;
+        capsEl.append(el);
+        return { el, x: c.x };
+      });
+
+      const v = new THREE.Vector3();
+      function render() {
+        for (const c of caps) {
+          v.set(c.x, 0, 0).project(camera);
+          c.el.style.left = `${(v.x * .5 + .5) * innerWidth}px`;
+          c.el.style.top = `${(-v.y * .5 + .5) * innerHeight + 16}px`;
+        }
+        renderer.render(scene, camera);
+      }
+      render();
+      addEventListener('resize', () => {
+        camera.aspect = innerWidth / innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(innerWidth, innerHeight);
+        render();
+      });
+    </script>
+  </body>
+</html>

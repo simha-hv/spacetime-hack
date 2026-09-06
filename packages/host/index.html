@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Brawl Games — Host</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0d12;
+        --panel: rgba(255, 255, 255, 0.05);
+        --line: rgba(255, 255, 255, 0.12);
+        --text: #f4f6fb;
+        --muted: rgba(244, 246, 251, 0.55);
+        --ok: #3ddc84;
+        --warn: #ffd23d;
+        --bad: #ff4d4d;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: var(--bg);
+        color: var(--text);
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      body {
+        background:
+          radial-gradient(1400px 900px at 50% 25%, #2a4a63 0%, #17293a 55%, #0e1a26 100%);
+      }
+      /* width/height are load-bearing, not decoration: a canvas is a replaced
+         element, so `inset: 0` alone leaves it at its intrinsic attribute size
+         and it overflows the viewport on any display with dpr > 1. */
+      #game {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
+      /* ------------------------------- HUD ------------------------------- */
+
+      #hud { position: fixed; inset: 0; pointer-events: none; }
+
+      .nametag {
+        position: absolute;
+        top: 0;
+        left: 0;
+        font-size: 19px;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+        text-shadow:
+          0 2px 0 rgba(11, 13, 18, 0.9),
+          0 0 12px rgba(11, 13, 18, 0.9);
+        will-change: transform;
+      }
+
+      #banner {
+        position: fixed;
+        left: 50%;
+        /* Above the arena, not across it — a winner banner sitting on top of
+           the platform hides the thing people are looking at. The join panel
+           shrinks out of the way (see #lobby.compact) so they never collide. */
+        top: 13%;
+        transform: translate(-50%, -50%);
+        padding: 10px 40px;
+        border-radius: 18px;
+        background: rgba(11, 13, 18, 0.55);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        font-size: 76px;
+        font-weight: 900;
+        letter-spacing: 0.04em;
+        text-align: center;
+        text-shadow: 0 6px 40px rgba(0, 0, 0, 0.75);
+      }
+      #banner.huge { font-size: 150px; padding: 0 56px; }
+      /*
+       * In attract mode the join panel is deliberately enormous, and the
+       * banner sat right on top of it. Nothing is happening on the arena at
+       * that point, so the banner drops into the empty middle instead of
+       * fighting the QR for the same corner.
+       */
+      body.attract #banner { top: 58%; }
+      body.attract #bannerSub { top: calc(58% + 56px); }
+      #bannerSub {
+        position: fixed;
+        left: 50%;
+        top: calc(13% + 56px);
+        transform: translateX(-50%);
+        font-size: 22px;
+        color: var(--muted);
+        text-align: center;
+        text-shadow: 0 2px 16px rgba(0, 0, 0, 0.8);
+      }
+      #banner.hidden, #bannerSub.hidden { display: none; }
+
+      #roundInfo {
+        position: fixed;
+        top: 34px;
+        right: 34px;
+        text-align: right;
+      }
+      #roundName {
+        font-size: 30px;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+      }
+      #roundTimer {
+        font-size: 16px;
+        color: var(--muted);
+        margin-top: 4px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      #standings {
+        position: fixed;
+        right: 34px;
+        top: 120px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-width: 210px;
+      }
+      .standing {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 14px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid var(--line);
+        font-size: 17px;
+        font-weight: 700;
+      }
+      .standing i { width: 13px; height: 13px; border-radius: 50%; flex: none; }
+      .standing span { flex: 1; }
+      .standing b { font-size: 12px; letter-spacing: 0.1em; color: var(--ok); }
+      .standing.out { opacity: 0.4; }
+      .standing.out b { color: var(--bad); }
+
+      #lobby {
+        position: fixed;
+        top: 34px;
+        left: 34px;
+        display: flex;
+        gap: 26px;
+        align-items: center;
+        padding: 26px 30px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+      }
+      /*
+       * Compact mode shrinks the TEXT, not the QR.
+       *
+       * It used to be `transform: scale(0.52)` on the whole panel, which took
+       * the code down to about 108px on screen — too small to scan from across
+       * a room, which is the only thing it is there for. The room code, the URL
+       * and the padding are what can afford to give way once a round is
+       * running; the QR barely moves.
+       */
+      #lobby {
+        transition: padding 0.35s ease, gap 0.35s ease, opacity 0.35s ease;
+      }
+      #lobby.compact {
+        gap: 18px;
+        padding: 16px 20px;
+        opacity: 0.9;
+      }
+      #lobby.compact #qr { width: 236px; height: 236px; }
+      #lobby.compact #code { font-size: 62px; }
+      #lobby.compact .join-label { font-size: 12px; }
+      #lobby.compact #url { font-size: 13px; margin-top: 7px; }
+      #lobby.compact #status { font-size: 12px; margin-top: 6px; }
+      #lobby.compact #addCpu { margin-top: 9px; padding: 7px 13px; font-size: 14px; }
+      #lobby.compact #addCpu small { font-size: 10px; }
+
+      #qr {
+        width: 320px;
+        height: 320px;
+        background: #fff;
+        border-radius: 14px;
+        padding: 12px;
+        flex: none;
+        transition: width 0.35s ease, height 0.35s ease;
+      }
+      .join-label {
+        font-size: 15px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      #code {
+        font-size: 132px;
+        line-height: 0.92;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        font-variant-numeric: tabular-nums;
+        margin: 0;
+      }
+      #url {
+        margin-top: 12px;
+        font-size: 17px;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      #status {
+        margin-top: 10px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+      #status[data-tone='ok'] { color: var(--ok); }
+      #status[data-tone='warn'] { color: var(--warn); }
+      #status[data-tone='bad'] { color: var(--bad); }
+
+      /*
+       * Add a CPU brawler. One click, one bot.
+       *
+       * Lives on the join panel because that is where someone standing at the
+       * big screen is already looking, and it answers the question that panel
+       * raises: "there is only one of me — can I even play?"
+       */
+      #addCpu {
+        margin-top: 14px;
+        font: inherit;
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        padding: 10px 18px;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        background: rgba(255, 255, 255, 0.09);
+        color: var(--text);
+        cursor: pointer;
+        transition: background 0.15s, opacity 0.15s;
+      }
+      #addCpu:hover { background: rgba(255, 255, 255, 0.16); }
+      #addCpu:active { transform: translateY(1px); }
+      #addCpu:disabled { opacity: 0.35; cursor: default; }
+      #addCpu small {
+        display: block;
+        margin-top: 3px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        color: var(--muted);
+      }
+
+      #hint {
+        position: fixed;
+        left: 50%;
+        bottom: 40px;
+        transform: translateX(-50%);
+        text-align: center;
+        color: var(--muted);
+        font-size: 19px;
+        pointer-events: none;
+      }
+      #hint.hidden { display: none; }
+
+      #soundHint {
+        position: fixed;
+        left: 50%;
+        bottom: 22px;
+        transform: translateX(-50%);
+        padding: 9px 20px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.09);
+        border: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 15px;
+      }
+      #soundHint.hidden { display: none; }
+
+      #debug {
+        position: fixed;
+        right: 20px;
+        bottom: 16px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        color: rgba(244, 246, 251, 0.4);
+        text-align: right;
+        white-space: pre;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+
+    <div id="hud">
+      <div id="roundInfo">
+        <div id="roundName">KNOCKOUT</div>
+        <div id="roundTimer"></div>
+      </div>
+      <div id="standings"></div>
+      <div id="banner" class="hidden"></div>
+      <div id="bannerSub" class="hidden"></div>
+    </div>
+
+    <div id="lobby">
+      <div id="qr"></div>
+      <div>
+        <div class="join-label">Scan to join</div>
+        <h1 id="code">····</h1>
+        <div id="url">connecting…</div>
+        <div id="status" data-tone="warn">connecting…</div>
+        <button id="addCpu" type="button">+ Add CPU<small>PLAY SOLO OR EVEN UP THE ODDS</small></button>
+      </div>
+    </div>
+
+    <div id="hint">Scan the code with your phone camera. Up to 4 players — join or leave any time.</div>
+    <div id="soundHint" class="hidden">Click anywhere to enable sound</div>
+    <div id="debug"></div>
+
+    <script type="module" src="./assets/__HOST_ENTRY__"></script>
+  </body>
+</html>

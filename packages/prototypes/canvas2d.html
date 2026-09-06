@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Canvas 2D animals</title>
+    <link rel="stylesheet" href="./hud.css" />
+    <style>
+      :root { --bg: #f2ead9; --text: #3a3040; --muted: rgba(58,48,64,.55); --line: rgba(58,48,64,.14); }
+      body { background: #f2ead9; overflow: hidden; }
+      header { position: fixed; top: 24px; left: 30px; z-index: 5; }
+      h1 { margin: 0; font-size: 25px; }
+      header p { margin: 6px 0 0; font-size: 13.5px; color: var(--muted); max-width: 60ch; line-height: 1.5; }
+      #bar {
+        position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+        display: flex; gap: 8px; align-items: center; padding: 7px;
+        background: rgba(255,253,248,.92); border: 1px solid var(--line);
+        border-radius: 999px; z-index: 20;
+      }
+      #bar button { font: inherit; font-size: 13px; font-weight: 700; padding: 8px 15px;
+        border-radius: 999px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+      #bar button.on { background: #3a3040; color: #f2ead9; }
+      .dot { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+      .dot.on { border-color: #3a3040; }
+      #bar .sep { width: 1px; height: 20px; background: var(--line); }
+      .tag { color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <header>
+      <h1>Canvas 2D animals</h1>
+      <p>
+        No engine, no WebGL, no model files. Every character is drawn with paths,
+        gradients and clipped shading — layered fur, rim light, cast shadow and
+        painted eyes. Same cast, same colours as the modelled version.
+      </p>
+    </header>
+
+    <div id="bar">
+      <button id="poseBtn" class="on">Stance</button>
+      <div class="sep"></div>
+      <span style="font-size:12px;color:var(--muted);padding:0 4px">Colour</span>
+    </div>
+    <div class="tag">canvas 2d · 0 deps · hand-drawn paths + gradient shading</div>
+
+    <script type="module">
+      /* ------------------------------------------------------------------ *
+       * Drawing helpers.
+       *
+       * Everything is built from three primitives — a shaded blob, a fur tuft
+       * and an eye — because a consistent lighting model across every shape is
+       * what stops 2D characters looking like clip art. Light is always from
+       * the upper left, so every blob gets the same highlight and the same
+       * warm bounce underneath.
+       * ------------------------------------------------------------------ */
+
+      const LIGHT = { x: -0.42, y: -0.5 };
+
+      /**
+       * Lighten (k > 1) or darken (k < 1) a colour.
+       *
+       * Accepts BOTH '#rrggbb' and 'rgb(r,g,b)'. That matters: limbs are drawn
+       * with an already-shaded colour which then gets shaded again by the
+       * gradient inside blob(). A hex-only parser returns NaN on the second
+       * pass, and every arm, leg and ear silently renders black.
+       */
+      function shade(color, k) {
+        let r, g, b;
+        if (color[0] === '#') {
+          const n = parseInt(color.slice(1), 16);
+          r = (n >> 16) & 255; g = (n >> 8) & 255; b = n & 255;
+        } else {
+          const m = color.match(/-?\d+(\.\d+)?/g);
+          if (!m || m.length < 3) return color;
+          [r, g, b] = m.map(Number);
+        }
+        const f = (v) => Math.max(0, Math.min(255, Math.round(k > 1 ? v + (255 - v) * (k - 1) : v * k)));
+        return `rgb(${f(r)},${f(g)},${f(b)})`;
+      }
+
+      /** An ellipse with a directional gradient, an outline and a soft rim. */
+      function blob(g, x, y, rx, ry, color, opts = {}) {
+        const rot = opts.rot ?? 0;
+        g.save();
+        g.translate(x, y);
+        g.rotate(rot);
+
+        const grad = g.createLinearGradient(LIGHT.x * rx, LIGHT.y * ry, -LIGHT.x * rx, -LIGHT.y * ry);
+        grad.addColorStop(0, shade(color, opts.lit ?? 1.24));
+        grad.addColorStop(0.55, color);
+        grad.addColorStop(1, shade(color, opts.dark ?? 0.84));
+
+        g.beginPath();
+        g.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+        g.fillStyle = grad;
+        g.fill();
+
+        if (opts.stroke !== false) {
+          g.lineWidth = opts.lw ?? 3;
+          g.strokeStyle = opts.strokeColor ?? shade(color, 0.5);
+          g.stroke();
+        }
+        g.restore();
+      }
+
+      /** A row of overlapping arcs along an edge — reads as fur at any size. */
+      function fur(g, x, y, rx, ry, color, { count = 9, depth = 0.22, from = Math.PI, to = Math.PI * 2 } = {}) {
+        g.save();
+        g.beginPath();
+        for (let i = 0; i <= count; i++) {
+          const a = from + ((to - from) * i) / count;
+          const px = x + Math.cos(a) * rx;
+          const py = y + Math.sin(a) * ry;
+          if (i === 0) g.moveTo(px, py);
+          else {
+            const am = from + ((to - from) * (i - 0.5)) / count;
+            g.quadraticCurveTo(
+              x + Math.cos(am) * rx * (1 + depth),
+              y + Math.sin(am) * ry * (1 + depth),
+              px,
+              py,
+            );
+          }
+        }
+        g.closePath();
+        g.fillStyle = color;
+        g.fill();
+        g.restore();
+      }
+
+      /** Eye with sclera, iris, pupil and two specular dots. */
+      function eye(g, x, y, r, look = 0, blink = 0) {
+        if (blink > 0.7) {
+          g.beginPath();
+          g.moveTo(x - r, y);
+          g.quadraticCurveTo(x, y + r * 0.5, x + r, y);
+          g.lineWidth = r * 0.4;
+          g.strokeStyle = '#2b2430';
+          g.lineCap = 'round';
+          g.stroke();
+          return;
+        }
+        g.beginPath();
+        g.ellipse(x, y, r, r * 1.12, 0, 0, Math.PI * 2);
+        g.fillStyle = '#fffdf8';
+        g.fill();
+        g.lineWidth = r * 0.22;
+        g.strokeStyle = '#2b2430';
+        g.stroke();
+
+        g.beginPath();
+        g.ellipse(x + look * r * 0.35, y + r * 0.08, r * 0.62, r * 0.7, 0, 0, Math.PI * 2);
+        g.fillStyle = '#3b2f2a';
+        g.fill();
+
+        g.beginPath();
+        g.arc(x + look * r * 0.35, y + r * 0.1, r * 0.34, 0, Math.PI * 2);
+        g.fillStyle = '#120e14';
+        g.fill();
+
+        g.beginPath();
+        g.arc(x + look * r * 0.35 - r * 0.22, y - r * 0.3, r * 0.22, 0, Math.PI * 2);
+        g.fillStyle = 'rgba(255,255,255,.95)';
+        g.fill();
+        g.beginPath();
+        g.arc(x + look * r * 0.35 + r * 0.2, y + r * 0.28, r * 0.1, 0, Math.PI * 2);
+        g.fillStyle = 'rgba(255,255,255,.6)';
+        g.fill();
+      }
+
+      const CREAM = '#fff3e0';
+
+      /* ------------------------------ characters ------------------------ */
+
+      /*
+       * Each draws at a unit scale around the origin, feet at y = 0, roughly
+       * 2.2 units tall. `p` carries the pose so the same character can stand,
+       * punch or lie flat.
+       */
+
+      function legs(g, s, color, p) {
+        const spread = p.legSpread ?? 0.34;
+        for (const side of [-1, 1]) {
+          const lx = side * spread * s;
+          blob(g, lx, -0.12 * s, 0.19 * s, 0.26 * s, shade(color, 0.94), { lw: 2.5 });
+          blob(g, lx + side * 0.03 * s, 0.02 * s, 0.21 * s, 0.12 * s, shade(color, 0.86), { lw: 2.5 });
+        }
+      }
+
+      function arms(g, s, color, p) {
+        const reach = p.punch ?? 0;
+        // Back arm first so the front one overlaps it.
+        blob(g, -0.52 * s, -0.72 * s, 0.16 * s, 0.2 * s, shade(color, 0.88), { lw: 2.5 });
+        blob(
+          g,
+          (0.5 + reach * 0.5) * s,
+          (-0.72 - reach * 0.1) * s,
+          0.17 * s,
+          0.21 * s,
+          shade(color, 1.08),
+          { lw: 2.5 },
+        );
+      }
+
+      const CHARACTERS = [
+        {
+          name: 'Pup',
+          note: 'Floppy ears, wide muzzle, tail curl.',
+          draw(g, s, color, p) {
+            legs(g, s, color, p);
+            // Body.
+            blob(g, 0, -0.72 * s, 0.56 * s, 0.5 * s, color, { lw: 3.4 });
+            blob(g, 0, -0.62 * s, 0.33 * s, 0.3 * s, CREAM, { stroke: false, lit: 1.12, dark: 0.9 });
+            // Tail.
+            blob(g, -0.6 * s, -0.95 * s, 0.12 * s, 0.2 * s, shade(color, 0.95), { rot: -0.6, lw: 2.5 });
+            arms(g, s, color, p);
+
+            // Head — drawn last and largest; the whole read lives here.
+            const hy = -1.55 * s;
+            fur(g, 0, hy, 0.6 * s, 0.56 * s, shade(color, 0.88), { count: 11, depth: 0.13 });
+            blob(g, 0, hy, 0.58 * s, 0.54 * s, color, { lw: 3.4 });
+            // Floppy ears over the head edge.
+            for (const side of [-1, 1]) {
+              blob(g, side * 0.55 * s, hy + 0.06 * s, 0.17 * s, 0.32 * s, shade(color, 0.9), {
+                rot: side * 0.28, lw: 3,
+              });
+            }
+            // Muzzle.
+            blob(g, 0, hy + 0.24 * s, 0.3 * s, 0.2 * s, CREAM, { lw: 2.6, lit: 1.1 });
+            blob(g, 0, hy + 0.14 * s, 0.1 * s, 0.08 * s, '#3b3038', { stroke: false });
+            g.beginPath();
+            g.moveTo(0, hy + 0.2 * s);
+            g.lineTo(0, hy + 0.3 * s);
+            g.lineWidth = 2.2;
+            g.strokeStyle = '#3b3038';
+            g.stroke();
+            eye(g, -0.21 * s, hy - 0.08 * s, 0.1 * s, p.look ?? 0, p.blink ?? 0);
+            eye(g, 0.21 * s, hy - 0.08 * s, 0.1 * s, p.look ?? 0, p.blink ?? 0);
+          },
+        },
+        {
+          name: 'Kit',
+          note: 'Triangle ears, slim muzzle, upright tail.',
+          draw(g, s, color, p) {
+            legs(g, s, color, p);
+            blob(g, 0, -0.72 * s, 0.5 * s, 0.48 * s, color, { lw: 3.4 });
+            blob(g, 0, -0.62 * s, 0.28 * s, 0.28 * s, CREAM, { stroke: false, lit: 1.12, dark: 0.9 });
+            blob(g, -0.58 * s, -1.05 * s, 0.1 * s, 0.28 * s, shade(color, 0.95), { rot: -0.35, lw: 2.5 });
+            arms(g, s, color, p);
+
+            const hy = -1.52 * s;
+            for (const side of [-1, 1]) {
+              g.beginPath();
+              g.moveTo(side * 0.14 * s, hy - 0.36 * s);
+              g.lineTo(side * 0.42 * s, hy - 0.86 * s);
+              g.lineTo(side * 0.52 * s, hy - 0.24 * s);
+              g.closePath();
+              g.fillStyle = shade(color, 0.96);
+              g.fill();
+              g.lineWidth = 3;
+              g.strokeStyle = shade(color, 0.45);
+              g.stroke();
+              g.beginPath();
+              g.moveTo(side * 0.2 * s, hy - 0.4 * s);
+              g.lineTo(side * 0.38 * s, hy - 0.72 * s);
+              g.lineTo(side * 0.44 * s, hy - 0.32 * s);
+              g.closePath();
+              g.fillStyle = '#ffb9c4';
+              g.fill();
+            }
+            fur(g, 0, hy, 0.54 * s, 0.5 * s, shade(color, 0.88), { count: 12, depth: 0.14 });
+            blob(g, 0, hy, 0.52 * s, 0.48 * s, color, { lw: 3.4 });
+            blob(g, 0, hy + 0.22 * s, 0.22 * s, 0.15 * s, CREAM, { lw: 2.4, lit: 1.1 });
+            blob(g, 0, hy + 0.14 * s, 0.07 * s, 0.055 * s, '#ff8fa0', { stroke: false });
+            // Whiskers.
+            g.lineWidth = 1.8;
+            g.strokeStyle = 'rgba(59,48,56,.6)';
+            for (const side of [-1, 1]) {
+              for (const k of [-0.05, 0.04]) {
+                g.beginPath();
+                g.moveTo(side * 0.2 * s, hy + (0.18 + k) * s);
+                g.lineTo(side * 0.62 * s, hy + (0.1 + k * 2.4) * s);
+                g.stroke();
+              }
+            }
+            eye(g, -0.2 * s, hy - 0.09 * s, 0.105 * s, p.look ?? 0, p.blink ?? 0);
+            eye(g, 0.2 * s, hy - 0.09 * s, 0.105 * s, p.look ?? 0, p.blink ?? 0);
+          },
+        },
+        {
+          name: 'Bun',
+          note: 'Tall ears, round cheeks, cotton tail.',
+          draw(g, s, color, p) {
+            legs(g, s, color, p);
+            blob(g, 0, -0.72 * s, 0.5 * s, 0.5 * s, color, { lw: 3.4 });
+            blob(g, 0, -0.62 * s, 0.28 * s, 0.3 * s, CREAM, { stroke: false, lit: 1.12, dark: 0.9 });
+            blob(g, -0.52 * s, -0.6 * s, 0.16 * s, 0.15 * s, CREAM, { lw: 2.4 });
+            arms(g, s, color, p);
+
+            const hy = -1.5 * s;
+            for (const side of [-1, 1]) {
+              blob(g, side * 0.2 * s, hy - 0.82 * s, 0.14 * s, 0.46 * s, shade(color, 0.98), {
+                rot: side * 0.12, lw: 3,
+              });
+              blob(g, side * 0.2 * s, hy - 0.82 * s, 0.075 * s, 0.36 * s, '#ffb9c4', {
+                rot: side * 0.12, stroke: false,
+              });
+            }
+            fur(g, 0, hy, 0.52 * s, 0.48 * s, shade(color, 0.88), { count: 10, depth: 0.12 });
+            blob(g, 0, hy, 0.5 * s, 0.46 * s, color, { lw: 3.4 });
+            blob(g, 0, hy + 0.2 * s, 0.2 * s, 0.14 * s, CREAM, { lw: 2.4, lit: 1.1 });
+            blob(g, 0, hy + 0.13 * s, 0.06 * s, 0.05 * s, '#ff8fa0', { stroke: false });
+            // Buck teeth.
+            g.fillStyle = '#fffdf6';
+            g.strokeStyle = '#3b3038';
+            g.lineWidth = 1.6;
+            for (const side of [-1, 1]) {
+              g.beginPath();
+              g.rect(side * 0.035 * s - 0.03 * s, hy + 0.2 * s, 0.06 * s, 0.1 * s);
+              g.fill();
+              g.stroke();
+            }
+            eye(g, -0.19 * s, hy - 0.1 * s, 0.1 * s, p.look ?? 0, p.blink ?? 0);
+            eye(g, 0.19 * s, hy - 0.1 * s, 0.1 * s, p.look ?? 0, p.blink ?? 0);
+          },
+        },
+        {
+          name: 'Cub',
+          note: 'Heaviest build, small round ears.',
+          draw(g, s, color, p) {
+            legs(g, s, color, { ...p, legSpread: 0.4 });
+            blob(g, 0, -0.7 * s, 0.62 * s, 0.52 * s, color, { lw: 3.6 });
+            blob(g, 0, -0.6 * s, 0.36 * s, 0.32 * s, CREAM, { stroke: false, lit: 1.12, dark: 0.9 });
+            arms(g, s, color, p);
+
+            const hy = -1.55 * s;
+            for (const side of [-1, 1]) {
+              blob(g, side * 0.44 * s, hy - 0.4 * s, 0.17 * s, 0.16 * s, shade(color, 0.96), { lw: 3 });
+              blob(g, side * 0.44 * s, hy - 0.4 * s, 0.09 * s, 0.08 * s, '#ffc4b0', { stroke: false });
+            }
+            fur(g, 0, hy, 0.62 * s, 0.55 * s, shade(color, 0.88), { count: 12, depth: 0.12 });
+            blob(g, 0, hy, 0.6 * s, 0.53 * s, color, { lw: 3.6 });
+            blob(g, 0, hy + 0.24 * s, 0.3 * s, 0.2 * s, CREAM, { lw: 2.6, lit: 1.1 });
+            blob(g, 0, hy + 0.15 * s, 0.11 * s, 0.085 * s, '#3b3038', { stroke: false });
+            // Heavy brows — the only aggressive read in the cast.
+            g.lineWidth = 4.5;
+            g.lineCap = 'round';
+            g.strokeStyle = '#3b3038';
+            for (const side of [-1, 1]) {
+              g.beginPath();
+              g.moveTo(side * 0.34 * s, hy - 0.24 * s);
+              g.lineTo(side * 0.1 * s, hy - 0.13 * s);
+              g.stroke();
+            }
+            eye(g, -0.22 * s, hy - 0.03 * s, 0.1 * s, p.look ?? 0, p.blink ?? 0);
+            eye(g, 0.22 * s, hy - 0.03 * s, 0.1 * s, p.look ?? 0, p.blink ?? 0);
+          },
+        },
+        {
+          name: 'Quack',
+          note: 'Hard beak, side wings, webbed feet.',
+          draw(g, s, color, p) {
+            // Webbed feet instead of paws.
+            for (const side of [-1, 1]) {
+              blob(g, side * 0.3 * s, -0.02 * s, 0.22 * s, 0.11 * s, '#ffb638', { lw: 2.5 });
+            }
+            blob(g, 0, -0.72 * s, 0.52 * s, 0.52 * s, color, { lw: 3.4 });
+            blob(g, 0, -0.62 * s, 0.3 * s, 0.32 * s, CREAM, { stroke: false, lit: 1.12, dark: 0.9 });
+            for (const side of [-1, 1]) {
+              blob(g, side * 0.52 * s, -0.72 * s, 0.14 * s, 0.3 * s, shade(color, 0.92), {
+                rot: side * 0.2, lw: 2.8,
+              });
+            }
+
+            const hy = -1.5 * s;
+            blob(g, 0, hy, 0.46 * s, 0.44 * s, color, { lw: 3.4 });
+            // Beak: two rounded slabs.
+            blob(g, 0, hy + 0.2 * s, 0.34 * s, 0.13 * s, '#ffb638', { lw: 2.8 });
+            blob(g, 0, hy + 0.31 * s, 0.28 * s, 0.08 * s, '#e89422', { lw: 2.4 });
+            eye(g, -0.18 * s, hy - 0.08 * s, 0.1 * s, p.look ?? 0, p.blink ?? 0);
+            eye(g, 0.18 * s, hy - 0.08 * s, 0.1 * s, p.look ?? 0, p.blink ?? 0);
+          },
+        },
+      ];
+
+      /* -------------------------------- page ---------------------------- */
+
+      const PALETTE = ['#ff6b6b', '#4b8bff', '#4bd98a', '#ffd23d', '#b57cff', '#ff9552'];
+      const canvas = document.getElementById('c');
+      const g = canvas.getContext('2d');
+      let W = 0, H = 0, DPR = 1;
+      let colorIndex = 0;
+      let poseIndex = 0;
+
+      const POSES = [
+        { name: 'Stance', p: { look: 0, punch: 0 } },
+        { name: 'Punch', p: { look: 0.6, punch: 1 } },
+        { name: 'Blink', p: { look: 0, punch: 0, blink: 1 } },
+      ];
+
+      function resize() {
+        DPR = Math.min(devicePixelRatio || 1, 2);
+        W = innerWidth; H = innerHeight;
+        canvas.width = Math.round(W * DPR);
+        canvas.height = Math.round(H * DPR);
+        draw();
+      }
+      addEventListener('resize', resize);
+
+      function draw() {
+        g.setTransform(DPR, 0, 0, DPR, 0, 0);
+        g.clearRect(0, 0, W, H);
+
+        const n = CHARACTERS.length;
+        const slotW = Math.min(W / n, 340);
+        const s = Math.min(slotW * 0.42, (H - 300) * 0.24);
+        const baseY = H * 0.62;
+        const pose = POSES[poseIndex].p;
+
+        for (let i = 0; i < n; i++) {
+          const cx = W / 2 + (i - (n - 1) / 2) * slotW;
+          const color = PALETTE[(i + colorIndex) % PALETTE.length];
+
+          // Cast shadow: soft, offset away from the light.
+          const sg = g.createRadialGradient(cx + 0.1 * s, baseY, 0, cx + 0.1 * s, baseY, s * 0.85);
+          sg.addColorStop(0, 'rgba(80,60,90,.32)');
+          sg.addColorStop(1, 'rgba(80,60,90,0)');
+          g.beginPath();
+          g.ellipse(cx + 0.1 * s, baseY + 0.06 * s, s * 0.85, s * 0.3, 0, 0, Math.PI * 2);
+          g.fillStyle = sg;
+          g.fill();
+
+          g.save();
+          g.translate(cx, baseY);
+          CHARACTERS[i].draw(g, s, color, pose);
+          g.restore();
+
+          g.font = `800 ${Math.round(s * 0.2)}px ui-sans-serif, system-ui, sans-serif`;
+          g.textAlign = 'center';
+          g.fillStyle = '#3a3040';
+          g.fillText(CHARACTERS[i].name, cx, baseY + s * 0.55);
+          g.font = `${Math.round(s * 0.12)}px ui-sans-serif, system-ui, sans-serif`;
+          g.fillStyle = 'rgba(58,48,64,.55)';
+          g.fillText(CHARACTERS[i].note, cx, baseY + s * 0.76);
+        }
+      }
+
+      const bar = document.getElementById('bar');
+      PALETTE.forEach((c, i) => {
+        const b = document.createElement('button');
+        b.className = 'dot' + (i === 0 ? ' on' : '');
+        b.style.background = c;
+        b.onclick = () => {
+          colorIndex = i;
+          bar.querySelectorAll('.dot').forEach((d, j) => d.classList.toggle('on', i === j));
+          draw();
+        };
+        bar.append(b);
+      });
+      const poseBtn = document.getElementById('poseBtn');
+      poseBtn.onclick = () => {
+        poseIndex = (poseIndex + 1) % POSES.length;
+        poseBtn.textContent = POSES[poseIndex].name;
+        draw();
+      };
+
+      resize();
+    </script>
+  </body>
+</html>

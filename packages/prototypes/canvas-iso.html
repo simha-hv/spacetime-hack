@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prototype · Canvas Isometric</title>
+    <link rel="stylesheet" href="./hud.css" />
+    <style>
+      :root {
+        --bg: #191426;
+        --accent: #ffb17a;
+        --text: #fff6ec;
+        --muted: rgba(255, 246, 236, 0.55);
+        --panel: rgba(255, 240, 225, 0.07);
+        --line: rgba(255, 220, 190, 0.16);
+      }
+      body {
+        background:
+          radial-gradient(1000px 620px at 50% 30%, #3a2b4d 0%, #221a33 45%, #140f1f 100%);
+      }
+      .code { color: var(--accent); }
+      .round-name { color: var(--accent); }
+      .qr rect { fill: #191426; }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <div class="tag">canvas 2d · 2.5D isometric · 0 deps · ~11KB</div>
+
+    <script type="module">
+      import { createSim, mountHud, STAGE_RADIUS } from './sim.js';
+      import { mountSwitcher } from './switcher.js';
+
+      mountSwitcher('canvas-iso');
+      const sim = createSim();
+      const updateHud = mountHud(document.body);
+
+      const canvas = document.getElementById('c');
+      const ctx = canvas.getContext('2d');
+      let W = 0, H = 0, DPR = 1, SCALE = 1;
+
+      /** Vertical squash that turns a top-down circle into a ground plane. */
+      const TILT = 0.52;
+      /** How many px tall one world unit of height is. */
+      const RISE = 0.92;
+
+      function resize() {
+        DPR = Math.min(devicePixelRatio || 1, 2);
+        W = innerWidth; H = innerHeight;
+        canvas.width = Math.round(W * DPR);
+        canvas.height = Math.round(H * DPR);
+        // Fit the ellipse to whichever axis is tighter. The vertical extent
+        // is the stage squashed by TILT, so the headroom for names has to be
+        // subtracted in PIXELS before dividing — mixing it into the world-unit
+        // denominator makes the whole arena collapse to a thumbnail.
+        const span = (STAGE_RADIUS + 2.2) * 2;
+        const headroomPx = 170;
+        SCALE = Math.min(W / span, Math.max(40, H - headroomPx) / (span * TILT));
+      }
+      addEventListener('resize', resize);
+      resize();
+
+      /** World (x, z, y) -> screen. */
+      function project(x, z, y, cx, cy) {
+        return [cx + x * SCALE, cy + z * SCALE * TILT - y * SCALE * RISE];
+      }
+
+      function roundedBody(g, x, y, w, h, r) {
+        g.beginPath();
+        g.moveTo(x - w / 2 + r, y - h / 2);
+        g.lineTo(x + w / 2 - r, y - h / 2);
+        g.quadraticCurveTo(x + w / 2, y - h / 2, x + w / 2, y - h / 2 + r);
+        g.lineTo(x + w / 2, y + h / 2 - r);
+        g.quadraticCurveTo(x + w / 2, y + h / 2, x + w / 2 - r, y + h / 2);
+        g.lineTo(x - w / 2 + r, y + h / 2);
+        g.quadraticCurveTo(x - w / 2, y + h / 2, x - w / 2, y + h / 2 - r);
+        g.lineTo(x - w / 2, y - h / 2 + r);
+        g.quadraticCurveTo(x - w / 2, y - h / 2, x - w / 2 + r, y - h / 2);
+        g.closePath();
+      }
+
+      function draw() {
+        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+        ctx.clearRect(0, 0, W, H);
+
+        const cx = W / 2 + (Math.random() - 0.5) * sim.shake * 14;
+        const cy = H * 0.54 + (Math.random() - 0.5) * sim.shake * 14;
+        const R = STAGE_RADIUS * SCALE;
+        const RY = R * TILT;
+        const THICK = 26;
+
+        /* ------------------------- the stage slab -------------------------- */
+
+        // Side wall first, so the top face sits on it.
+        ctx.beginPath();
+        ctx.ellipse(cx, cy + THICK, R, RY, 0, 0, Math.PI * 2);
+        ctx.fillStyle = '#2a2038';
+        ctx.fill();
+        ctx.fillRect(cx - R, cy, R * 2, THICK);
+
+        const top = ctx.createLinearGradient(cx, cy - RY, cx, cy + RY);
+        top.addColorStop(0, '#6d5b8f');
+        top.addColorStop(0.55, '#54456f');
+        top.addColorStop(1, '#3f3357');
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, R, RY, 0, 0, Math.PI * 2);
+        ctx.fillStyle = top;
+        ctx.fill();
+
+        // Warm rim light along the top edge.
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, R, RY, 0, Math.PI, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,196,148,0.85)';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, R, RY, 0, 0, Math.PI);
+        ctx.strokeStyle = 'rgba(255,177,122,0.35)';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        /* ----------------------------- impacts ----------------------------- */
+
+        for (const im of sim.impacts) {
+          const k = im.age / 0.6;
+          const [ix, iy] = project(im.x, im.z, 0, cx, cy);
+          ctx.beginPath();
+          ctx.ellipse(ix, iy, (0.5 + k * 2.4) * SCALE * im.power, (0.5 + k * 2.4) * SCALE * TILT * im.power, 0, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(255,225,190,${(1 - k) * 0.8})`;
+          ctx.lineWidth = 4 * (1 - k) + 1;
+          ctx.stroke();
+        }
+
+        /* ---------------------------- fighters ----------------------------- */
+
+        // Painter's algorithm: far players drawn first so near ones overlap.
+        const order = sim.fighters.filter((f) => f.alive).sort((a, b) => a.z - b.z);
+
+        for (const f of order) {
+          const [sx, sy] = project(f.x, f.z, 0, cx, cy);
+          const bodyW = 0.95 * SCALE * (1 + f.hit * 0.26);
+          const bodyH = 1.5 * SCALE * (1 - f.hit * 0.22);
+          const lift = f.y * SCALE * RISE;
+
+          // Soft contact shadow — shrinks and fades as they leave the ground.
+          const sh = 1 - Math.min(0.7, f.y * 0.5);
+          ctx.beginPath();
+          ctx.ellipse(sx, sy, bodyW * 0.62 * sh, bodyW * 0.62 * TILT * sh, 0, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(20,12,30,${0.5 * sh})`;
+          ctx.fill();
+
+          ctx.save();
+          ctx.translate(sx, sy - bodyH * 0.5 - lift);
+          ctx.rotate(f.tilt * 0.55 * Math.cos(f.tiltDir));
+
+          // Body with a vertical gradient: light from above, warm bounce below.
+          const g = ctx.createLinearGradient(0, -bodyH / 2, 0, bodyH / 2);
+          const base = f.hit > 0.05 ? '#ffffff' : f.color;
+          g.addColorStop(0, shade(base, 1.35));
+          g.addColorStop(0.6, base);
+          g.addColorStop(1, shade(base, 0.62));
+          roundedBody(ctx, 0, 0, bodyW, bodyH, bodyW * 0.46);
+          ctx.fillStyle = g;
+          ctx.fill();
+
+          // Rim light down one side sells the volume cheaply.
+          ctx.save();
+          ctx.clip();
+          ctx.beginPath();
+          ctx.ellipse(-bodyW * 0.42, -bodyH * 0.1, bodyW * 0.24, bodyH * 0.42, 0, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255,225,200,0.28)';
+          ctx.fill();
+          ctx.restore();
+
+          // Eyes, offset by facing so the direction reads.
+          const look = Math.sin(f.facing) * bodyW * 0.14;
+          for (const dx of [-0.19, 0.19]) {
+            ctx.beginPath();
+            ctx.ellipse(dx * bodyW + look, -bodyH * 0.16, bodyW * 0.1, bodyW * 0.12, 0, 0, Math.PI * 2);
+            ctx.fillStyle = '#fffaf4';
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(dx * bodyW + look * 1.5, -bodyH * 0.16, bodyW * 0.05, 0, Math.PI * 2);
+            ctx.fillStyle = '#241a2e';
+            ctx.fill();
+          }
+
+          // Punch arm.
+          if (f.punch > 0.02) {
+            ctx.beginPath();
+            ctx.arc(Math.sin(f.facing) * bodyW * (0.5 + f.punch * 0.6), bodyH * 0.05, bodyW * 0.2, 0, Math.PI * 2);
+            ctx.fillStyle = shade(base, 0.85);
+            ctx.fill();
+          }
+          ctx.restore();
+
+          ctx.font = '700 15px ui-sans-serif, system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = 'rgba(25,20,38,0.9)';
+          ctx.strokeText(f.name, sx, sy - bodyH - lift - 8);
+          ctx.fillStyle = f.color;
+          ctx.fillText(f.name, sx, sy - bodyH - lift - 8);
+        }
+      }
+
+      /** Multiply a hex colour toward light (>1) or dark (<1). */
+      function shade(hex, k) {
+        if (hex === '#ffffff') return k > 1 ? '#ffffff' : '#d8d8d8';
+        const n = parseInt(hex.slice(1), 16);
+        const c = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) =>
+          Math.max(0, Math.min(255, Math.round(v * k))),
+        );
+        return `rgb(${c[0]},${c[1]},${c[2]})`;
+      }
+
+      let last = performance.now();
+      function frame(now) {
+        const dt = Math.min((now - last) / 1000, 0.05);
+        last = now;
+        sim.update(dt);
+        draw();
+        updateHud(sim);
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+    </script>
+  </body>
+</html>

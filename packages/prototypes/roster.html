@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Character roster</title>
+    <link rel="stylesheet" href="./hud.css" />
+    <style>
+      :root {
+        --bg: #ece3d6;
+        --text: #2f2a34;
+        --muted: rgba(47, 42, 52, 0.55);
+        --line: rgba(47, 42, 52, 0.14);
+      }
+      body { background: #ece3d6; overflow: hidden; }
+      canvas { position: fixed; inset: 0; width: 100%; height: 100%; }
+
+      header {
+        position: fixed;
+        top: 26px;
+        left: 30px;
+        z-index: 5;
+      }
+      h1 { margin: 0; font-size: 26px; letter-spacing: -0.01em; }
+      header p { margin: 5px 0 0; font-size: 14px; color: var(--muted); max-width: 46ch; line-height: 1.5; }
+
+      /* Name plates, positioned over the 3D grid. */
+      .plate {
+        position: absolute;
+        transform: translate(-50%, 0);
+        text-align: center;
+        pointer-events: none;
+        width: 168px;
+      }
+      .plate b { display: block; font-size: 16px; font-weight: 800; }
+      .plate span { display: block; font-size: 11px; color: var(--muted); line-height: 1.35; margin-top: 2px; }
+
+      #controls {
+        position: fixed;
+        left: 50%;
+        bottom: 20px;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 7px;
+        background: rgba(255, 253, 248, 0.9);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        z-index: 20;
+      }
+      #controls button {
+        font: inherit;
+        font-size: 13px;
+        font-weight: 700;
+        padding: 8px 15px;
+        border-radius: 999px;
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+      }
+      #controls button.active { background: #2f2a34; color: #ece3d6; }
+      #controls .sep { width: 1px; height: 20px; background: var(--line); }
+      .dot { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+      .dot.active { border-color: #2f2a34; }
+      .tag { color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+
+    <header>
+      <h1>Character roster</h1>
+      <p>
+        Ten designs, same construction kit. Player colour goes on the body only —
+        muzzles, eyes and noses stay constant so four players read as one family.
+      </p>
+    </header>
+
+    <div id="plates"></div>
+
+    <div id="controls">
+      <button id="turn">Turn ¾</button>
+      <div class="sep"></div>
+      <span style="font-size:12px;color:var(--muted);padding:0 4px">Colour</span>
+    </div>
+
+    <div class="tag">three.js · static roster · press ← → to rotate</div>
+
+    <script type="module">
+      import * as THREE from './three.module.js';
+      import { CHARACTERS } from './characters.js';
+
+      const PALETTE = ['#ff5a5a', '#3d7dff', '#3ddc84', '#ffd23d', '#b06dff', '#ff8a3d'];
+
+      const canvas = document.getElementById('c');
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.02;
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color('#ece3d6');
+
+      /* Studio lighting: soft warm key, cool fill, gentle rim. Matte materials
+         under this read as clay/vinyl, which is what sells "toy". */
+      scene.add(new THREE.HemisphereLight('#fffaf0', '#cbbfae', 1.45));
+      const key = new THREE.DirectionalLight('#fff4e4', 2.5);
+      key.position.set(5, 11, 7);
+      key.castShadow = true;
+      key.shadow.mapSize.set(2048, 2048);
+      key.shadow.radius = 4;
+      key.shadow.bias = -0.0015;
+      const d = 12;
+      Object.assign(key.shadow.camera, { left: -d, right: d, top: d, bottom: -d, near: 1, far: 40 });
+      scene.add(key);
+      const fill = new THREE.DirectionalLight('#a8c4ff', 0.5);
+      fill.position.set(-7, 4, 4);
+      scene.add(fill);
+
+      // Ground plane catches the contact shadows that give them weight.
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(80, 80),
+        new THREE.MeshStandardMaterial({ color: '#e4d9c8', roughness: 1 }),
+      );
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      /* ------------------------------- layout ------------------------------ */
+
+      const COLS = 5;
+      const GAP_X = 3.15;
+      // Rows need a lot of Z separation: the back row's feet project higher on
+      // screen, and with a tight gap its name plate lands on the front row.
+      const GAP_Z = 6.4;
+      const rows = Math.ceil(CHARACTERS.length / COLS);
+
+      const slots = CHARACTERS.map((c, i) => {
+        const col = i % COLS;
+        const row = Math.floor(i / COLS);
+        const pivot = new THREE.Group();
+        pivot.position.set(
+          (col - (COLS - 1) / 2) * GAP_X,
+          0.95,
+          (row - (rows - 1) / 2) * GAP_Z,
+        );
+        pivot.scale.setScalar(1.22);
+        scene.add(pivot);
+        return { char: c, pivot, mesh: null };
+      });
+
+      let colorIndex = 0;
+      function rebuild() {
+        for (let i = 0; i < slots.length; i++) {
+          const s = slots[i];
+          if (s.mesh) s.pivot.remove(s.mesh);
+          // Stagger the palette so the sheet shows several colours at once,
+          // which is the only way to see whether the design survives recolouring.
+          const color = PALETTE[(i + colorIndex) % PALETTE.length];
+          s.mesh = s.char.build(color);
+          s.pivot.add(s.mesh);
+        }
+      }
+      rebuild();
+
+      /* -------------------------------- plates ----------------------------- */
+
+      const platesEl = document.getElementById('plates');
+      const plates = slots.map((s) => {
+        const el = document.createElement('div');
+        el.className = 'plate';
+        el.innerHTML = `<b>${s.char.name}</b><span>${s.char.note}</span>`;
+        platesEl.append(el);
+        return el;
+      });
+
+      /* ------------------------------- camera ------------------------------ */
+
+      const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 120);
+      function resize() {
+        renderer.setSize(innerWidth, innerHeight);
+        camera.aspect = innerWidth / innerHeight;
+
+        // Frame the whole grid, fitting to whichever axis is tighter.
+        // Fit width and depth separately rather than through a bounding
+        // radius — the grid is much wider than it is deep, and a radius fit
+        // wastes most of the screen.
+        const halfW = ((COLS - 1) / 2) * GAP_X + 1.9;
+        const halfD = ((rows - 1) / 2) * GAP_Z + 2.4;
+        const vFov = (camera.fov * Math.PI) / 180;
+        const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+
+        // The near row sits closer to the camera than the centre, so it
+        // projects wider — fitting on the centre distance clips it off both
+        // edges. Fit the horizontal span at the NEAR row's depth instead.
+        const rawDist = Math.max(halfW / Math.tan(hFov / 2), halfD / Math.tan(vFov / 2));
+        const nearPull = halfD * 0.72;
+        const dist = (rawDist + nearPull) * 1.06;
+
+        // Shallow enough to keep faces readable; steep enough to separate rows.
+        camera.position.set(0, dist * 0.46, dist * 0.78);
+        camera.lookAt(0, 0.6, 0);
+        camera.updateProjectionMatrix();
+      }
+      addEventListener('resize', resize);
+      resize();
+
+      /* ------------------------------ controls ----------------------------- */
+
+      const controls = document.getElementById('controls');
+      PALETTE.forEach((c, i) => {
+        const b = document.createElement('button');
+        b.className = 'dot' + (i === 0 ? ' active' : '');
+        b.style.background = c;
+        b.title = c;
+        b.onclick = () => {
+          colorIndex = i;
+          rebuild();
+          controls.querySelectorAll('.dot').forEach((d, j) => d.classList.toggle('active', i === j));
+        };
+        controls.append(b);
+      });
+
+      // Three fixed presentation angles. No idle animation — these are for
+      // judging the designs, not the motion.
+      const ANGLES = [
+        { label: 'Front', y: 0 },
+        { label: 'Turn ¾', y: -0.62 },
+        { label: 'Side', y: -1.4 },
+      ];
+      let angle = 1;
+      const turnBtn = document.getElementById('turn');
+      function applyAngle() {
+        turnBtn.textContent = ANGLES[angle].label;
+        for (const s of slots) s.pivot.rotation.y = ANGLES[angle].y;
+      }
+      turnBtn.onclick = () => {
+        angle = (angle + 1) % ANGLES.length;
+        applyAngle();
+      };
+      addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowRight') { angle = (angle + 1) % ANGLES.length; applyAngle(); }
+        if (e.key === 'ArrowLeft') { angle = (angle + ANGLES.length - 1) % ANGLES.length; applyAngle(); }
+      });
+      applyAngle();
+
+      /* ------------------------------- render ------------------------------ */
+
+      const v = new THREE.Vector3();
+      function render() {
+        for (let i = 0; i < slots.length; i++) {
+          v.copy(slots[i].pivot.position);
+          // Ground point under the feet, allowing for the pivot's scale.
+          v.y -= 0.95 * slots[i].pivot.scale.y;
+          v.project(camera);
+          plates[i].style.left = `${(v.x * 0.5 + 0.5) * innerWidth}px`;
+          plates[i].style.top = `${(-v.y * 0.5 + 0.5) * innerHeight + 14}px`;
+        }
+        renderer.render(scene, camera);
+      }
+      // Static: render on demand only, so this costs nothing while you look.
+      const draw = () => requestAnimationFrame(render);
+      draw();
+      addEventListener('resize', draw);
+      new MutationObserver(draw).observe(document.body, { subtree: true, attributes: true });
+      turnBtn.addEventListener('click', () => setTimeout(draw, 0));
+      controls.addEventListener('click', () => setTimeout(draw, 0));
+    </script>
+  </body>
+</html>

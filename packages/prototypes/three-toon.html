@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prototype · Three Toon</title>
+    <link rel="stylesheet" href="./hud.css" />
+    <style>
+      :root {
+        --bg: #12132b;
+        --accent: #ffe066;
+        --panel: rgba(255, 255, 255, 0.07);
+        --line: rgba(255, 224, 102, 0.25);
+      }
+      body { background: linear-gradient(180deg, #1b1c3d 0%, #12132b 60%, #0b0b1b 100%); }
+      .code { color: var(--accent); }
+      .round-name { color: var(--accent); }
+      .banner {
+        color: #12132b;
+        background: var(--accent);
+        -webkit-text-stroke: 0;
+        box-shadow: 0 6px 0 rgba(0, 0, 0, 0.35);
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <div class="tag">three.js · cel shaded + outlines · ~160KB gz</div>
+
+    <script type="module">
+      import * as THREE from './three.module.js';
+      import { createSim, mountHud, STAGE_RADIUS } from './sim.js';
+      import { mountSwitcher } from './switcher.js';
+
+      mountSwitcher('three-toon');
+      const sim = createSim();
+      const updateHud = mountHud(document.body);
+
+      const canvas = document.getElementById('c');
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFShadowMap;
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color('#12132b');
+
+      const camera = new THREE.PerspectiveCamera(44, innerWidth / innerHeight, 0.1, 200);
+
+      /* --------------------------- toon ramp -------------------------------
+         A 3-step gradient map is what turns smooth shading into hard bands.
+         Cheap: a 1D texture, no custom shaders, no post-processing pass. */
+      const ramp = new THREE.DataTexture(new Uint8Array([90, 90, 90, 255, 190, 190, 190, 255, 255, 255, 255, 255]), 3, 1);
+      ramp.needsUpdate = true;
+      ramp.minFilter = ramp.magFilter = THREE.NearestFilter;
+
+      scene.add(new THREE.HemisphereLight('#9fb4ff', '#241a3a', 0.9));
+      const key = new THREE.DirectionalLight('#ffffff', 2.6);
+      key.position.set(7, 14, 7);
+      key.castShadow = true;
+      key.shadow.mapSize.set(2048, 2048);
+      key.shadow.camera.near = 1;
+      key.shadow.camera.far = 60;
+      key.shadow.bias = -0.001;
+      const d = 14;
+      Object.assign(key.shadow.camera, { left: -d, right: d, top: d, bottom: -d });
+      scene.add(key);
+
+      /* ------------------------------- stage -------------------------------- */
+
+      const slab = new THREE.Mesh(
+        new THREE.CylinderGeometry(STAGE_RADIUS, STAGE_RADIUS * 0.94, 1.0, 64),
+        new THREE.MeshToonMaterial({ color: '#3b3f7a', gradientMap: ramp }),
+      );
+      slab.position.y = -0.5;
+      slab.receiveShadow = true;
+      scene.add(slab);
+      scene.add(outlineOf(slab, 1.012));
+
+      const rim = new THREE.Mesh(
+        new THREE.TorusGeometry(STAGE_RADIUS, 0.18, 10, 88),
+        new THREE.MeshBasicMaterial({ color: '#ffe066' }),
+      );
+      rim.rotation.x = Math.PI / 2;
+      scene.add(rim);
+
+      /**
+       * Inverted-hull outline: the same mesh, slightly larger, with front faces
+       * culled and a flat black material. No post-processing, no extra render
+       * pass, works on any GPU — and it is what makes cel shading read.
+       */
+      function outlineOf(mesh, scale) {
+        const o = new THREE.Mesh(
+          mesh.geometry,
+          new THREE.MeshBasicMaterial({ color: '#0a0a18', side: THREE.BackSide }),
+        );
+        o.scale.setScalar(scale);
+        o.position.copy(mesh.position);
+        return o;
+      }
+
+      /* ------------------------------ fighters ------------------------------ */
+
+      const bodyGeo = new THREE.CapsuleGeometry(0.46, 0.62, 6, 20);
+      const limbGeo = new THREE.SphereGeometry(0.2, 12, 10);
+      const eyeGeo = new THREE.SphereGeometry(0.1, 12, 10);
+
+      const rigs = sim.fighters.map((f) => {
+        const mat = new THREE.MeshToonMaterial({ color: new THREE.Color(f.color), gradientMap: ramp });
+        const outlineMat = new THREE.MeshBasicMaterial({ color: '#0a0a18', side: THREE.BackSide });
+        const g = new THREE.Group();
+
+        const body = new THREE.Mesh(bodyGeo, mat);
+        body.castShadow = true;
+        const bodyOutline = new THREE.Mesh(bodyGeo, outlineMat);
+        bodyOutline.scale.setScalar(1.07);
+        g.add(bodyOutline, body);
+
+        const arms = [-1, 1].map((s) => {
+          const a = new THREE.Mesh(limbGeo, mat);
+          a.castShadow = true;
+          a.position.set(s * 0.52, 0.02, 0.12);
+          const ao = new THREE.Mesh(limbGeo, outlineMat);
+          ao.scale.setScalar(1.14);
+          a.add(ao);
+          g.add(a);
+          return a;
+        });
+
+        for (const s of [-1, 1]) {
+          const e = new THREE.Mesh(eyeGeo, new THREE.MeshBasicMaterial({ color: '#0a0a18' }));
+          e.position.set(s * 0.17, 0.3, 0.42);
+          e.scale.set(1, 1.25, 1);
+          g.add(e);
+        }
+
+        scene.add(g);
+        return { g, body, bodyOutline, arms, mat, base: new THREE.Color(f.color) };
+      });
+
+      const labelLayer = document.createElement('div');
+      labelLayer.style.cssText = 'position:fixed;inset:0;pointer-events:none';
+      document.body.append(labelLayer);
+      const labels = sim.fighters.map((f) => {
+        const el = document.createElement('div');
+        el.textContent = f.name;
+        el.style.cssText =
+          `position:absolute;font:900 17px ui-sans-serif,system-ui,sans-serif;color:${f.color};` +
+          '-webkit-text-stroke:4px #0a0a18;paint-order:stroke;transform:translate(-50%,-100%)';
+        labelLayer.append(el);
+        return el;
+      });
+
+      addEventListener('resize', () => {
+        camera.aspect = innerWidth / innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(innerWidth, innerHeight);
+      });
+
+      const v = new THREE.Vector3();
+      const white = new THREE.Color('#ffffff');
+      let last = performance.now();
+
+      function frame(now) {
+        const dt = Math.min((now - last) / 1000, 0.05);
+        last = now;
+        sim.update(dt);
+
+        sim.fighters.forEach((f, i) => {
+          const r = rigs[i];
+          r.g.visible = f.alive;
+          if (!f.alive) { labels[i].style.display = 'none'; return; }
+          labels[i].style.display = '';
+
+          r.g.position.set(f.x, 0.72 + f.y, f.z);
+          r.g.rotation.set(
+            Math.sin(f.tiltDir) * f.tilt * 0.8,
+            f.facing,
+            -Math.cos(f.tiltDir) * f.tilt * 0.8,
+          );
+          const s = 1 + f.hit * 0.24;
+          r.body.scale.set(s, 1 / s, s);
+          r.bodyOutline.scale.set(s * 1.07, (1 / s) * 1.07, s * 1.07);
+          r.mat.color.copy(r.base).lerp(white, f.hit * 0.8);
+
+          const reach = 0.12 + f.punch * 0.52;
+          r.arms[0].position.z = reach;
+          r.arms[1].position.z = reach;
+
+          v.set(f.x, 1.9 + f.y, f.z).project(camera);
+          labels[i].style.transform =
+            `translate(${(v.x * 0.5 + 0.5) * innerWidth}px,${(-v.y * 0.5 + 0.5) * innerHeight}px) translate(-50%,-100%)`;
+        });
+
+        let cx = 0, cz = 0, n = 0, spread = 0;
+        for (const f of sim.fighters) if (f.alive) { cx += f.x; cz += f.z; n++; }
+        if (n) { cx /= n; cz /= n; }
+        for (const f of sim.fighters) if (f.alive) spread = Math.max(spread, Math.hypot(f.x - cx, f.z - cz));
+        const radius = Math.max(5.5, spread + 3.2);
+        const vFov = (camera.fov * Math.PI) / 180;
+        const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+        const dist = radius / Math.sin(Math.min(vFov, hFov) / 2);
+
+        const sx = (Math.random() - 0.5) * sim.shake * 0.5;
+        const sy = (Math.random() - 0.5) * sim.shake * 0.5;
+        camera.position.lerp(new THREE.Vector3(cx + sx, dist * 0.6 + sy, cz + dist * 0.7), 0.08);
+        camera.lookAt(cx, 0.8, cz);
+
+        renderer.render(scene, camera);
+        updateHud(sim);
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+    </script>
+  </body>
+</html>

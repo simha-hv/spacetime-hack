@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Modelled animals</title>
+    <link rel="stylesheet" href="./hud.css" />
+    <style>
+      :root { --bg: #ece3d6; --text: #2f2a34; --muted: rgba(47,42,52,.55); --line: rgba(47,42,52,.14); }
+      body { background: #ece3d6; overflow: hidden; }
+      header { position: fixed; top: 24px; left: 30px; z-index: 5; }
+      h1 { margin: 0; font-size: 25px; }
+      header p { margin: 6px 0 0; font-size: 13.5px; color: var(--muted); max-width: 58ch; line-height: 1.5; }
+      .plate { position: absolute; transform: translate(-50%,0); text-align: center; width: 190px; pointer-events: none; }
+      .plate b { display: block; font-size: 16px; font-weight: 800; }
+      .plate span { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+      #bar {
+        position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+        display: flex; gap: 8px; align-items: center; padding: 7px;
+        background: rgba(255,253,248,.92); border: 1px solid var(--line);
+        border-radius: 999px; z-index: 20;
+      }
+      #bar button { font: inherit; font-size: 13px; font-weight: 700; padding: 8px 15px;
+        border-radius: 999px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+      #bar button.on { background: #2f2a34; color: #ece3d6; }
+      .dot { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+      .dot.on { border-color: #2f2a34; }
+      #bar .sep { width: 1px; height: 20px; background: var(--line); }
+      .tag { color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <header>
+      <h1>Modelled animals</h1>
+      <p>
+        Real authored meshes, not primitives — the direction from the comparison.
+        Player colour is applied as a tint over the original texture, so you can see
+        whether four recoloured copies of one model still read as four players.
+      </p>
+    </header>
+    <div id="plates"></div>
+
+    <div id="bar">
+      <button id="tintBtn" class="on">Tint on</button>
+      <div class="sep"></div>
+      <span style="font-size:12px;color:var(--muted);padding:0 4px">Colour</span>
+    </div>
+    <div class="tag">three.js · GLTFLoader · models from the three.js example set</div>
+
+    <script type="importmap">
+      { "imports": { "three": "./three.module.js" } }
+    </script>
+    <script type="module">
+      import * as THREE from './three.module.js';
+      import { GLTFLoader } from './jsm/loaders/GLTFLoader.js';
+
+      const MODELS = [
+        { file: 'Fox.glb', name: 'Fox', note: 'Sharp snout, big tail. Strongest silhouette.' },
+        { file: 'Horse.glb', name: 'Horse', note: 'Long legs — reads tall and gangly.' },
+        { file: 'Parrot.glb', name: 'Parrot', note: 'Wide wings. Best top-down read.' },
+        { file: 'Stork.glb', name: 'Stork', note: 'Very tall and thin. Odd one out.' },
+        { file: 'Flamingo.glb', name: 'Flamingo', note: 'Curved neck, single leg stance.' },
+      ];
+      const PALETTE = ['#ff5a5a', '#3d7dff', '#3ddc84', '#ffd23d', '#b06dff', '#ff8a3d'];
+
+      const canvas = document.getElementById('c');
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color('#ece3d6');
+      scene.add(new THREE.HemisphereLight('#fffaf0', '#cbbfae', 1.5));
+      const key = new THREE.DirectionalLight('#fff4e4', 2.3);
+      key.position.set(5, 11, 7);
+      key.castShadow = true;
+      key.shadow.mapSize.set(2048, 2048);
+      key.shadow.radius = 4;
+      key.shadow.bias = -0.0015;
+      Object.assign(key.shadow.camera, { left: -12, right: 12, top: 12, bottom: -12, near: 1, far: 40 });
+      scene.add(key);
+      // Object3D.position is a read-only Vector3 reference — set it, do not
+      // assign over it.
+      const fill = new THREE.DirectionalLight('#a8c4ff', 0.45);
+      fill.position.set(-7, 4, 4);
+      scene.add(fill);
+
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(90, 90),
+        new THREE.MeshStandardMaterial({ color: '#e4d9c8', roughness: 1 }),
+      );
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      const GAP = 3.4;
+      const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 120);
+
+      const platesEl = document.getElementById('plates');
+      const slots = [];
+      let tint = true;
+      let colorIndex = 0;
+
+      const loader = new GLTFLoader();
+      let loaded = 0;
+
+      MODELS.forEach((spec, i) => {
+        const pivot = new THREE.Group();
+        pivot.position.x = (i - (MODELS.length - 1) / 2) * GAP;
+        scene.add(pivot);
+
+        const plate = document.createElement('div');
+        plate.className = 'plate';
+        plate.innerHTML = `<b>${spec.name}</b><span>${spec.note}</span>`;
+        platesEl.append(plate);
+
+        const slot = { spec, pivot, plate, mats: [] };
+        slots.push(slot);
+
+        loader.load(`./models/${spec.file}`, (gltf) => {
+          const obj = gltf.scene;
+          obj.traverse((o) => {
+            if (!o.isMesh) return;
+            o.castShadow = true;
+            o.receiveShadow = true;
+            // Clone the material so tinting one model never bleeds into another.
+            o.material = o.material.clone();
+            o.material.roughness = 0.85;
+            o.material.metalness = 0;
+            slot.mats.push({ m: o.material, base: o.material.color.clone() });
+          });
+
+          // Normalise every model to the same height and stand it on the floor;
+          // the source models are wildly different scales.
+          // Normalise on the LARGEST dimension, not height: the birds are in
+          // flight poses, so their height is tiny and a height fit shrinks
+          // them to nothing next to the fox.
+          const box = new THREE.Box3().setFromObject(obj);
+          const size = new THREE.Vector3();
+          box.getSize(size);
+          obj.scale.setScalar(2.6 / Math.max(size.x, size.y, size.z));
+          const b2 = new THREE.Box3().setFromObject(obj);
+          obj.position.y = -b2.min.y;
+          obj.rotation.y = -0.55;
+          pivot.add(obj);
+
+          if (++loaded === MODELS.length) { applyTint(); resize(); }
+        });
+      });
+
+      /** Tint towards the player colour while keeping the model's own shading. */
+      function applyTint() {
+        for (let i = 0; i < slots.length; i++) {
+          const target = new THREE.Color(PALETTE[(i + colorIndex) % PALETTE.length]);
+          for (const { m, base } of slots[i].mats) {
+            m.color.copy(base);
+            if (tint) m.color.lerp(target, 0.72);
+          }
+        }
+        render();
+      }
+
+      function resize() {
+        renderer.setSize(innerWidth, innerHeight);
+        camera.aspect = innerWidth / innerHeight;
+        const halfW = ((MODELS.length - 1) / 2) * GAP + 2.1;
+        const vFov = (camera.fov * Math.PI) / 180;
+        const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+        const dist = Math.max(halfW / Math.tan(hFov / 2), 2.4 / Math.tan(vFov / 2)) * 1.05;
+        camera.position.set(0, dist * 0.34, dist * 0.86);
+        camera.lookAt(0, 0.9, 0);
+        camera.updateProjectionMatrix();
+        render();
+      }
+      addEventListener('resize', resize);
+
+      const v = new THREE.Vector3();
+      function render() {
+        for (const s of slots) {
+          v.copy(s.pivot.position).project(camera);
+          s.plate.style.left = `${(v.x * 0.5 + 0.5) * innerWidth}px`;
+          s.plate.style.top = `${(-v.y * 0.5 + 0.5) * innerHeight + 12}px`;
+        }
+        renderer.render(scene, camera);
+      }
+
+      const bar = document.getElementById('bar');
+      PALETTE.forEach((c, i) => {
+        const b = document.createElement('button');
+        b.className = 'dot' + (i === 0 ? ' on' : '');
+        b.style.background = c;
+        b.onclick = () => {
+          colorIndex = i;
+          bar.querySelectorAll('.dot').forEach((d, j) => d.classList.toggle('on', i === j));
+          applyTint();
+        };
+        bar.append(b);
+      });
+      const tintBtn = document.getElementById('tintBtn');
+      tintBtn.onclick = () => {
+        tint = !tint;
+        tintBtn.textContent = tint ? 'Tint on' : 'Tint off';
+        tintBtn.classList.toggle('on', tint);
+        applyTint();
+      };
+
+      resize();
+    </script>
+  </body>
+</html>

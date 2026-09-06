@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prototype · Sketchbook</title>
+    <link rel="stylesheet" href="./hud.css" />
+    <style>
+      :root {
+        --bg: #f4efe3;
+        --text: #2b2620;
+        --muted: rgba(43, 38, 32, 0.6);
+        --panel: rgba(255, 253, 246, 0.8);
+        --line: rgba(43, 38, 32, 0.28);
+        --accent: #d1495b;
+        --ok: #2a7d51;
+        --bad: #d1495b;
+      }
+      body { background: #f4efe3; }
+      .join, .standing { box-shadow: 2px 3px 0 rgba(43, 38, 32, 0.16); }
+      .qr { background: #2b2620; }
+      .qr rect { fill: #f4efe3; }
+      .code { color: #2b2620; }
+      .banner { background: #fffdf6; color: #2b2620; box-shadow: 3px 4px 0 rgba(43,38,32,.2); }
+      .switcher { background: rgba(255, 253, 246, 0.9); }
+      .switcher a.active { background: #2b2620; color: #f4efe3; }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <div class="tag">rough.js + canvas · hand-drawn, 12fps "boil" · ~10KB gz</div>
+
+    <script type="module">
+      import rough from './rough.esm.js';
+      import { createSim, mountHud, STAGE_RADIUS } from './sim.js';
+      import { mountSwitcher } from './switcher.js';
+
+      mountSwitcher('sketch');
+      const sim = createSim();
+      const updateHud = mountHud(document.body);
+
+      const canvas = document.getElementById('c');
+      const ctx = canvas.getContext('2d');
+      const rc = rough.canvas(canvas);
+      let W = 0, H = 0, DPR = 1, SCALE = 1;
+
+      function resize() {
+        DPR = Math.min(devicePixelRatio || 1, 2);
+        W = innerWidth; H = innerHeight;
+        canvas.width = Math.round(W * DPR);
+        canvas.height = Math.round(H * DPR);
+        const span = (STAGE_RADIUS + 2.4) * 2;
+        SCALE = Math.min(W / span, Math.max(40, H - 190) / (span * 0.55));
+      }
+      addEventListener('resize', resize);
+      resize();
+
+      const INK = '#2b2620';
+
+      /*
+       * Rough.js re-randomises its strokes on every call, which is far too
+       * expensive AND too jittery to run at 60fps. Redrawing on a 12fps clock
+       * instead gives the "boil" of hand-drawn animation — the lines wobble
+       * like ink on paper — and costs a fifth of the work. The look and the
+       * optimisation are the same decision.
+       */
+      const BOIL_HZ = 12;
+      let boilAcc = 0;
+      let seed = 1;
+
+      function draw() {
+        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+        ctx.clearRect(0, 0, W, H);
+
+        // Paper grain.
+        ctx.fillStyle = '#f4efe3';
+        ctx.fillRect(0, 0, W, H);
+        ctx.globalAlpha = 0.05;
+        for (let i = 0; i < 120; i++) {
+          ctx.fillStyle = i % 2 ? '#2b2620' : '#8a7f6d';
+          ctx.fillRect(((i * 137) % W), ((i * 311) % H), 2, 2);
+        }
+        ctx.globalAlpha = 1;
+
+        const cx = W / 2 + (Math.random() - 0.5) * sim.shake * 10;
+        const cy = H * 0.56 + (Math.random() - 0.5) * sim.shake * 10;
+        const R = STAGE_RADIUS * SCALE;
+        const RY = R * 0.55;
+
+        // Stage: hatched ellipse, drawn like a pencil sketch.
+        rc.ellipse(cx, cy, R * 2, RY * 2, {
+          seed,
+          stroke: INK,
+          strokeWidth: 2.4,
+          fill: '#e7dcc6',
+          fillStyle: 'hachure',
+          hachureAngle: 42,
+          hachureGap: 7,
+          roughness: 1.5,
+        });
+        rc.ellipse(cx, cy + 12, R * 2, RY * 2, {
+          seed: seed + 1, stroke: 'rgba(43,38,32,.35)', strokeWidth: 1.6, roughness: 2, fill: undefined,
+        });
+
+        for (const im of sim.impacts) {
+          const k = im.age / 0.6;
+          if (k > 0.75) continue;
+          const rr = (0.6 + k * 2.4) * SCALE * im.power;
+          rc.circle(cx + im.x * SCALE, cy + im.z * SCALE * 0.55, rr * 2, {
+            seed: seed + 5,
+            stroke: '#d1495b',
+            strokeWidth: 3 * (1 - k) + 1,
+            roughness: 2.2,
+          });
+        }
+
+        const order = sim.fighters.filter((f) => f.alive).sort((a, b) => a.z - b.z);
+        for (const f of order) {
+          const sx = cx + f.x * SCALE;
+          const sy = cy + f.z * SCALE * 0.55;
+          const w = 0.95 * SCALE * (1 + f.hit * 0.24);
+          const h = 1.45 * SCALE * (1 - f.hit * 0.2);
+          const lift = f.y * SCALE * 0.85;
+
+          // Shadow scribble.
+          rc.ellipse(sx, sy + 4, w * 1.1, w * 0.42, {
+            seed: seed + f.i, stroke: 'none', fill: 'rgba(43,38,32,.28)',
+            fillStyle: 'solid', roughness: 2,
+          });
+
+          ctx.save();
+          ctx.translate(sx, sy - h / 2 - lift);
+          ctx.rotate(f.tilt * 0.5 * Math.cos(f.tiltDir));
+
+          rc.ellipse(0, 0, w, h, {
+            seed: seed + f.i * 3,
+            stroke: INK,
+            strokeWidth: 3,
+            fill: f.hit > 0.05 ? '#ffffff' : f.color,
+            fillStyle: 'solid',
+            roughness: 1.6,
+          });
+          // Cross-hatch shading down one side.
+          rc.ellipse(-w * 0.2, h * 0.1, w * 0.55, h * 0.6, {
+            seed: seed + f.i * 7,
+            stroke: 'none',
+            fill: 'rgba(43,38,32,.22)',
+            fillStyle: 'hachure',
+            hachureGap: 4,
+            hachureAngle: 70,
+            roughness: 1.4,
+          });
+
+          ctx.fillStyle = INK;
+          const look = Math.sin(f.facing) * w * 0.12;
+          for (const dx of [-0.17, 0.17]) {
+            ctx.beginPath();
+            ctx.ellipse(dx * w + look, -h * 0.18, w * 0.055, w * 0.075, 0, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          if (f.punch > 0.02) {
+            rc.circle(Math.sin(f.facing) * w * (0.55 + f.punch * 0.6), h * 0.04, w * 0.42, {
+              seed: seed + f.i * 11, stroke: INK, strokeWidth: 2.5,
+              fill: f.color, fillStyle: 'solid', roughness: 1.8,
+            });
+          }
+          ctx.restore();
+
+          ctx.font = '700 17px ui-sans-serif, system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.lineWidth = 5;
+          ctx.strokeStyle = '#f4efe3';
+          ctx.strokeText(f.name, sx, sy - h - lift - 6);
+          ctx.fillStyle = INK;
+          ctx.fillText(f.name, sx, sy - h - lift - 6);
+        }
+      }
+
+      let last = performance.now();
+      function frame(now) {
+        const dt = Math.min((now - last) / 1000, 0.05);
+        last = now;
+        sim.update(dt);
+
+        boilAcc += dt;
+        if (boilAcc >= 1 / BOIL_HZ) {
+          boilAcc = 0;
+          seed = (seed + 1) % 2048;
+        }
+        draw();
+        updateHud(sim);
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+    </script>
+  </body>
+</html>

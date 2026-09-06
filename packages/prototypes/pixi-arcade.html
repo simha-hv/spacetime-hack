@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prototype · Pixi Arcade</title>
+    <link rel="stylesheet" href="./hud.css" />
+    <style>
+      :root {
+        --bg: #05030f;
+        --accent: #ff3ea5;
+        --panel: rgba(255, 62, 165, 0.08);
+        --line: rgba(255, 62, 165, 0.28);
+      }
+      body {
+        background:
+          radial-gradient(1200px 800px at 50% 60%, #1a0a3a 0%, #0b0520 55%, #05030f 100%);
+      }
+      .code { color: var(--accent); text-shadow: 0 0 26px rgba(255, 62, 165, 0.6); }
+      .round-name { color: #4df0ff; }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <div class="tag">pixi.js v8 · WebGL 2D · real bloom + particles · ~110KB gz</div>
+
+    <script type="module">
+      import { Application, Container, Graphics, BlurFilter } from './pixi.min.mjs';
+      import { createSim, mountHud, STAGE_RADIUS } from './sim.js';
+      import { mountSwitcher } from './switcher.js';
+
+      mountSwitcher('pixi-arcade');
+      const sim = createSim();
+      const updateHud = mountHud(document.body);
+
+      const app = new Application();
+      await app.init({
+        canvas: document.getElementById('c'),
+        resizeTo: window,
+        antialias: true,
+        backgroundAlpha: 0,
+        resolution: Math.min(devicePixelRatio, 2),
+        autoDensity: true,
+      });
+
+      const world = new Container();
+      app.stage.addChild(world);
+
+      /*
+       * Real bloom without a filter package: draw the bright things TWICE —
+       * once sharp, once into a heavily blurred additive layer underneath.
+       * That is what separates this from the plain-canvas neon look; glow here
+       * actually bleeds across neighbouring shapes instead of being a shadow.
+       */
+      const glow = new Container();
+      glow.filters = [new BlurFilter({ strength: 18, quality: 4 })];
+      glow.blendMode = 'add';
+      glow.alpha = 0.85;
+      world.addChild(glow);
+
+      const mid = new Container();
+      world.addChild(mid);
+
+      const stage = new Graphics();
+      const stageGlow = new Graphics();
+      glow.addChild(stageGlow);
+      mid.addChild(stage);
+
+      const bodies = sim.fighters.map((f) => {
+        const g = new Graphics();
+        const gg = new Graphics();
+        glow.addChild(gg);
+        mid.addChild(g);
+        return { g, gg, color: Number('0x' + f.color.slice(1)) };
+      });
+
+      const fx = new Graphics();
+      const fxGlow = new Graphics();
+      glow.addChild(fxGlow);
+      mid.addChild(fx);
+
+      /** Sparks. Fixed-size pool so a long session cannot grow memory. */
+      const MAX_SPARKS = 220;
+      const sparks = [];
+
+      const labelLayer = document.createElement('div');
+      labelLayer.style.cssText = 'position:fixed;inset:0;pointer-events:none';
+      document.body.append(labelLayer);
+      const labels = sim.fighters.map((f) => {
+        const el = document.createElement('div');
+        el.textContent = f.name;
+        el.style.cssText =
+          `position:absolute;font:800 16px ui-sans-serif,system-ui,sans-serif;color:${f.color};` +
+          `text-shadow:0 0 14px ${f.color},0 2px 6px #000;transform:translate(-50%,-100%)`;
+        labelLayer.append(el);
+        return el;
+      });
+
+      let SCALE = 1;
+      function layout() {
+        SCALE = Math.min(app.screen.width, app.screen.height) / ((STAGE_RADIUS + 2.6) * 2);
+        world.x = app.screen.width / 2;
+        world.y = app.screen.height / 2;
+      }
+      app.renderer.on('resize', layout);
+      layout();
+
+      let last = performance.now();
+      app.ticker.add(() => {
+        const now = performance.now();
+        const dt = Math.min((now - last) / 1000, 0.05);
+        last = now;
+        sim.update(dt);
+
+        world.x = app.screen.width / 2 + (Math.random() - 0.5) * sim.shake * 18;
+        world.y = app.screen.height / 2 + (Math.random() - 0.5) * sim.shake * 18;
+
+        const R = STAGE_RADIUS * SCALE;
+
+        // Stage: a dark disc with a hot ring, plus scan rings for depth.
+        stage.clear();
+        stage.circle(0, 0, R).fill({ color: 0x0d0725, alpha: 0.92 });
+        for (let i = 1; i <= 3; i++) {
+          stage.circle(0, 0, (R * i) / 4).stroke({ color: 0x4df0ff, width: 1, alpha: 0.08 });
+        }
+        stage.circle(0, 0, R).stroke({ color: 0x4df0ff, width: 4 });
+        stageGlow.clear();
+        stageGlow.circle(0, 0, R).stroke({ color: 0x4df0ff, width: 7 });
+
+        // Fighters.
+        sim.fighters.forEach((f, i) => {
+          const { g, gg, color } = bodies[i];
+          g.clear();
+          gg.clear();
+          labels[i].style.display = f.alive ? '' : 'none';
+          if (!f.alive) return;
+
+          const x = f.x * SCALE;
+          const y = f.z * SCALE - f.y * SCALE * 0.7;
+          const r = 0.55 * SCALE * (1 + f.hit * 0.28);
+          const tint = f.hit > 0.05 ? 0xffffff : color;
+
+          // Ground shadow.
+          g.ellipse(f.x * SCALE, f.z * SCALE + r * 0.4, r * 0.85, r * 0.3).fill({ color: 0x000000, alpha: 0.5 });
+          // Body + facing pip.
+          g.circle(x, y, r).fill(tint);
+          const reach = r * (0.7 + f.punch * 0.8);
+          g.circle(x + Math.sin(f.facing) * reach, y + Math.cos(f.facing) * reach, r * 0.3).fill(0xffffff);
+          // Glow twin.
+          gg.circle(x, y, r * 1.15).fill(tint);
+
+          labels[i].style.transform =
+            `translate(${world.x + x}px,${world.y + y - r - 16}px) translate(-50%,-100%)`;
+        });
+
+        // Impact rings.
+        fx.clear();
+        fxGlow.clear();
+        for (const im of sim.impacts) {
+          const k = im.age / 0.6;
+          const rr = (0.5 + k * 3) * SCALE * im.power;
+          const a = (1 - k) * 0.9;
+          fx.circle(im.x * SCALE, im.z * SCALE, rr).stroke({ color: 0xffffff, width: 5 * (1 - k) + 1, alpha: a });
+          fxGlow.circle(im.x * SCALE, im.z * SCALE, rr).stroke({ color: 0xff3ea5, width: 9 * (1 - k) + 2, alpha: a });
+
+          if (im.age < 0.02) {
+            for (let n = 0; n < 18 && sparks.length < MAX_SPARKS; n++) {
+              const a2 = Math.random() * Math.PI * 2;
+              const sp = 2 + Math.random() * 7;
+              sparks.push({ x: im.x, z: im.z, vx: Math.cos(a2) * sp, vz: Math.sin(a2) * sp, life: 1 });
+            }
+          }
+        }
+
+        for (let i = sparks.length - 1; i >= 0; i--) {
+          const s = sparks[i];
+          s.x += s.vx * dt;
+          s.z += s.vz * dt;
+          s.vx *= 0.92;
+          s.vz *= 0.92;
+          s.life -= dt * 2.2;
+          if (s.life <= 0) { sparks.splice(i, 1); continue; }
+          const sx = s.x * SCALE;
+          const sz = s.z * SCALE;
+          fx.circle(sx, sz, 3 * s.life).fill({ color: 0xffffff, alpha: s.life });
+          fxGlow.circle(sx, sz, 5 * s.life).fill({ color: 0xffd23d, alpha: s.life * 0.9 });
+        }
+
+        updateHud(sim);
+      });
+    </script>
+  </body>
+</html>

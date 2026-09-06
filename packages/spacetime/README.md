@@ -3,12 +3,23 @@
 A [SpacetimeDB](https://github.com/clockworklabs/spacetimedb) module holding the
 room and player registry for brawl-games.
 
-## Status: scaffolding, not yet connected
+## Status: built and verified, not yet connected
 
 Nothing in the running system imports this. `RoomRegistry` in
-`packages/server/src/rooms.ts` is still the authoritative store, and the module
-here has never been compiled or published to a SpacetimeDB instance — there is
-no Rust toolchain or `spacetime` CLI in this environment yet.
+`packages/server/src/rooms.ts` is still the authoritative store.
+
+The module itself is real: it compiles against SpacetimeDB 2.10 and has been
+published to a local instance and exercised end to end —
+
+```
+create_room            -> room GCDA
+join_room  GCDA        -> slot 0, #ff4d4d RED, name ""
+set_profile GCDA ...   -> name "Karan", colour #35d6d6 CYAN
+```
+
+so the schema, the slot assignment, the palette walk and the colour swap all do
+what the TypeScript does. What has *not* happened is the wiring: no host, phone
+or relay talks to it, and it has not been published to Maincloud.
 
 It exists because the schema is the part worth designing first. `module/src/lib.rs`
 mirrors the current `Room` and `Player` types field for field, so connecting it
@@ -60,8 +71,32 @@ avoid the Scunthorpe problem. Shipping the stub would mangle real players' names
 
 ## Building it (once a toolchain exists)
 
+Install the CLI (prebuilt binary; `cargo install` also works but is slow):
+
 ```sh
-cargo install spacetimedb-cli
-spacetime build --project-path packages/spacetime/module
-spacetime publish --project-path packages/spacetime/module brawl-games
+curl -sSf https://install.spacetimedb.com | sh
+rustup target add wasm32-unknown-unknown
 ```
+
+Build, and try it against a local instance — no account needed:
+
+```sh
+spacetime start &                                     # local server on :3000
+spacetime publish -s local -p packages/spacetime/module brawl-games-simha
+spacetime call -s local brawl-games-simha create_room
+spacetime sql  -s local brawl-games-simha "SELECT * FROM room"
+```
+
+Publishing to Maincloud needs a login, which opens a browser:
+
+```sh
+spacetime login
+spacetime publish -s maincloud -p packages/spacetime/module brawl-games-simha
+```
+
+Maincloud database names share a global namespace, hence the suffix. Names must
+match `^[a-z0-9]+(-[a-z0-9]+)*$`.
+
+Two CLI notes worth knowing: reducer arguments are JSON, so an `Option<String>`
+argument is `'{"some":"Karan"}'` rather than a bare string, and `wasm-opt` is
+not installed here, so builds log an optimisation warning and continue.

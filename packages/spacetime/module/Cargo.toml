@@ -8,4 +8,4 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-spacetimedb = "1.0"
+spacetimedb = { version = "2.10", features = ["rand"] }

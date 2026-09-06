@@ -41,7 +41,7 @@ const PALETTE: [(&str, &str); 8] = [
 
 /* --------------------------------- tables --------------------------------- */
 
-#[table(name = room, public)]
+#[table(accessor = room, public)]
 pub struct Room {
     #[primary_key]
     pub code: String,
@@ -52,7 +52,8 @@ pub struct Room {
     pub host_disconnected_at: Option<Timestamp>,
 }
 
-#[table(name = player, public)]
+#[table(accessor = player, public)]
+#[derive(Clone)]
 pub struct Player {
     #[primary_key]
     #[auto_inc]
@@ -125,7 +126,7 @@ pub fn create_room(ctx: &ReducerContext) -> Result<(), String> {
     let code = allocate_code(ctx)?;
     ctx.db.room().insert(Room {
         code,
-        host: ctx.sender,
+        host: ctx.sender(),
         created_at: ctx.timestamp,
         last_activity_at: ctx.timestamp,
         host_disconnected_at: None,
@@ -146,7 +147,7 @@ pub fn join_room(ctx: &ReducerContext, code: String) -> Result<(), String> {
 
     // Reclaim first: a returning phone keeps its slot and colour. This is the
     // whole reason the grace window exists.
-    if let Some(mut existing) = held.iter().find(|p| p.identity == ctx.sender).cloned() {
+    if let Some(mut existing) = held.iter().find(|p| p.identity == ctx.sender()).cloned() {
         existing.disconnected_at = None;
         ctx.db.player().id().update(existing);
         touch(ctx, room);
@@ -174,7 +175,7 @@ pub fn join_room(ctx: &ReducerContext, code: String) -> Result<(), String> {
         color: hex.to_string(),
         color_name: color_name.to_string(),
         name: String::new(),
-        identity: ctx.sender,
+        identity: ctx.sender(),
         disconnected_at: None,
     });
 
@@ -207,7 +208,7 @@ pub fn set_profile(
     let held = members(ctx, &code);
     let mut me = held
         .iter()
-        .find(|p| p.identity == ctx.sender)
+        .find(|p| p.identity == ctx.sender())
         .cloned()
         .ok_or("not in this room")?;
 
@@ -248,7 +249,7 @@ pub fn leave_room(ctx: &ReducerContext, code: String) -> Result<(), String> {
 
     if let Some(me) = members(ctx, &code)
         .into_iter()
-        .find(|p| p.identity == ctx.sender)
+        .find(|p| p.identity == ctx.sender())
     {
         ctx.db.player().id().delete(me.id);
     }
@@ -260,12 +261,12 @@ pub fn leave_room(ctx: &ReducerContext, code: String) -> Result<(), String> {
 /// Start the grace window rather than dropping anyone immediately.
 #[reducer(client_disconnected)]
 pub fn identity_disconnected(ctx: &ReducerContext) {
-    for mut p in ctx.db.player().iter().filter(|p| p.identity == ctx.sender) {
+    for mut p in ctx.db.player().iter().filter(|p| p.identity == ctx.sender()) {
         p.disconnected_at = Some(ctx.timestamp);
         ctx.db.player().id().update(p);
     }
 
-    for mut r in ctx.db.room().iter().filter(|r| r.host == ctx.sender) {
+    for mut r in ctx.db.room().iter().filter(|r| r.host == ctx.sender()) {
         r.host_disconnected_at = Some(ctx.timestamp);
         ctx.db.room().code().update(r);
     }
@@ -273,12 +274,12 @@ pub fn identity_disconnected(ctx: &ReducerContext) {
 
 #[reducer(client_connected)]
 pub fn identity_connected(ctx: &ReducerContext) {
-    for mut p in ctx.db.player().iter().filter(|p| p.identity == ctx.sender) {
+    for mut p in ctx.db.player().iter().filter(|p| p.identity == ctx.sender()) {
         p.disconnected_at = None;
         ctx.db.player().id().update(p);
     }
 
-    for mut r in ctx.db.room().iter().filter(|r| r.host == ctx.sender) {
+    for mut r in ctx.db.room().iter().filter(|r| r.host == ctx.sender()) {
         r.host_disconnected_at = None;
         ctx.db.room().code().update(r);
     }

@@ -3,23 +3,25 @@
 A [SpacetimeDB](https://github.com/clockworklabs/spacetimedb) module holding the
 room and player registry for brawl-games.
 
-## Status: built and verified, not yet connected
+## Status: live on Maincloud, not yet connected
 
-Nothing in the running system imports this. `RoomRegistry` in
-`packages/server/src/rooms.ts` is still the authoritative store.
-
-The module itself is real: it compiles against SpacetimeDB 2.10 and has been
-published to a local instance and exercised end to end —
+Published and running at **`brawl-games-simha`**
+(dashboard: https://spacetimedb.com/brawl-games-simha), and exercised end to end
+against it —
 
 ```
-create_room            -> room GCDA
-join_room  GCDA        -> slot 0, #ff4d4d RED, name ""
-set_profile GCDA ...   -> name "Karan", colour #35d6d6 CYAN
+create_room            -> room UX24
+join_room  UX24        -> slot 0, #ff4d4d RED, name ""
+set_profile UX24 ...   -> name "Karan", colour #3ddc84 GREEN
 ```
 
 so the schema, the slot assignment, the palette walk and the colour swap all do
-what the TypeScript does. What has *not* happened is the wiring: no host, phone
-or relay talks to it, and it has not been published to Maincloud.
+what the TypeScript does.
+
+What has *not* happened is the wiring. Nothing in the running game talks to this
+— no host, no phone, no relay — and `RoomRegistry` in
+`packages/server/src/rooms.ts` is still the authoritative store. The database is
+live and correct; the game does not read from it yet.
 
 It exists because the schema is the part worth designing first. `module/src/lib.rs`
 mirrors the current `Room` and `Player` types field for field, so connecting it
